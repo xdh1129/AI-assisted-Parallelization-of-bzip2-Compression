@@ -32,17 +32,26 @@ int main(int argc, char **argv) {
     CompressedBlock *comp = (CompressedBlock *)calloc(n, sizeof(CompressedBlock));
     if (!comp) { fprintf(stderr, "pbzx: oom\n"); free_blocks(blocks, nblocks); return 5; }
 
+    /* Computed up front (not inside the compress loop) so the loop carries no
+     * shared mutable state and can become `#pragma omp parallel for`. */
     size_t input_bytes = 0;
+    if (!empty_input)
+        for (size_t i = 0; i < nblocks; i++) input_bytes += blocks[i].len;
+
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
     int err = 0;
-    /* Sequential path. The parallel stage replaces this loop with
-     * `#pragma omp parallel for` (each iteration writes its own slot). */
+    /* Sequential path. To parallelize, add `#pragma omp parallel for` here:
+     * each iteration writes only its own comp[i] slot (no shared writes), which
+     * is safe. But two things below are NOT OpenMP-safe and must change first:
+     *   - the `break` on error is illegal in an omp for; replace it with an
+     *     `if (!err)` guard per iteration, setting err via `#pragma omp atomic`;
+     *   - input_bytes is deliberately summed above, not here, to avoid a
+     *     loop-carried reduction. */
     for (size_t i = 0; i < n; i++) {
         const uint8_t *src = empty_input ? NULL : blocks[i].data;
         size_t len = empty_input ? 0 : blocks[i].len;
-        input_bytes += len;
         if (compress_block(src, len, opt.level, &comp[i].data, &comp[i].len) != 0) {
             err = 1; break;
         }

@@ -46,7 +46,9 @@ src/
   writer.{c,h}          # emit compressed blocks in ID order (concatenated .bz2)
 bench/
   run_bench.py          # sweep threads x block-size x input -> results.csv
-  profile.py            # wrap perf / /usr/bin/time -v / valgrind massif
+  profilers.py          # wrap perf / /usr/bin/time -v / valgrind massif
+                        # (named profilers.py, not profile.py, to avoid
+                        #  shadowing Python's stdlib `profile` module)
   plot.py               # speedup, throughput, efficiency, ratio charts
   verify.py             # round-trip correctness oracle
 data/                   # test inputs (gitignored) + fetch/generate script
@@ -95,7 +97,7 @@ decompressor rather than self-consistency.
   compression ratio, peak RSS (from `/usr/bin/time -v` "Maximum resident set size"), and
   correctness pass/fail. Speedup (= seq_time / par_time) and parallel efficiency
   (= speedup / threads) are derived from the `threads=1` row.
-- **`profile.py`** (Linux): wraps `perf stat` (CPU utilization, cache behavior),
+- **`profilers.py`** (Linux): wraps `perf stat` (CPU utilization, cache behavior),
   `perf record`/`perf report` (hotspots), and `valgrind massif` (memory over time).
   Wired now; exercised mainly during the later Stage-3 profiling study.
 - **`plot.py`**: produces speedup-vs-threads, throughput-vs-block-size, parallel
