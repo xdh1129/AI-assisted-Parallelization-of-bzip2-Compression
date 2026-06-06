@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(make *)",
+      "Bash(git *)",
+      "Bash(python3 *)",
+      "Bash(./pbzx *)",
+      "Bash(bunzip2 *)",
+      "Bash(dd *)",
+      "Bash(ls *)",
+      "Bash(cat src/*)",
+      "Bash(cat Makefile)",
+      "Bash(lscpu)",
+      "Bash(nproc)",
+      "Bash(free *)",
+      "Bash(getconf *)",
+      "Bash(cat /proc/cpuinfo)",
+      "Bash(cat /sys/devices/system/cpu/cpu0/cache/*/size)",
+      "Bash(perf *)",
+      "Bash(valgrind *)",
+      "Bash(gprof *)",
+      "Bash(strace *)",
+      "Bash(/usr/bin/time *)"
+    ]
+  }
+}
