@@ -4,14 +4,14 @@
 
 **Goal:** Execute three AI-assisted parallelization experiments on the pbzx baseline (naive → constraint-guided → profiling-optimized), each on its own isolated git branch. Benchmark each against the sequential baseline and lbzip2, and produce a comparison report.
 
-**Architecture:** Each experiment stage lives on its own branch (`stage/1-naive`, `stage/2-constrained`, `stage/3-profiling`). All three branches start from the same sequential baseline (`feat/baseline-harness`). The agent for each stage opens a Claude Code session inside a git worktree on its branch. Stage 3 starts from the same source as Stage 1 and 2 — the difference is the prompt, which includes profiling data collected from Stage 2's output. The `bench/` harness evaluates all implementations uniformly using git worktrees.
+**Architecture:** Each experiment stage lives on its own branch (`stage/1-naive`, `stage/2-constrained`, `stage/3-profiling`). All three branches start from the same sequential baseline (`feat/baseline-harness`). The agent for each stage opens a Claude Code session inside a git worktree on its branch. The three stages differ only in what the agent is *allowed to do*, not in starting source. The `bench/` harness evaluates all implementations uniformly using git worktrees.
 
 **Branch lineage:**
 ```
 feat/baseline-harness (sequential baseline)
-├── stage/1-naive          (same starting source, minimal prompt)
-├── stage/2-constrained    (same starting source, machine-spec prompt)
-└── stage/3-profiling      (same starting source, profiling-data prompt)
+├── stage/1-naive          (same source; agent gets one prompt, no extra tools)
+├── stage/2-constrained    (same source; agent may run lscpu/nproc/free before designing)
+└── stage/3-profiling      (same source; agent may run perf/valgrind/etc. and iterate)
 ```
 
 **Tech Stack:** C11, pthreads or OpenMP (agent's choice), libbz2 1.0.8 (vendored), Python 3 + pytest (harness), perf/valgrind/gprof/`/usr/bin/time -v` (profiling, Linux), lbzip2 (reference)
@@ -540,142 +540,13 @@ Create a worktree for `stage/2-constrained`. The agent is permitted to run `lscp
 
 ---
 
-## Task 7: Profile Stage 2 Output → Update stage/3-profiling CLAUDE.md
-
-Profile the Stage 2 binary while its worktree is still available. Then add the raw
-profiling files and an updated CLAUDE.md to the **existing** `stage/3-profiling` branch
-(which already starts from the same sequential baseline as stages 1 and 2 — only the
-prompt context differs).
-
-**Files created/updated (on branch `stage/3-profiling`):**
-- `profiling/perf_stat.txt`
-- `profiling/time_v.txt`
-- `profiling/perf_report.txt`
-- `profiling/scaling.txt`
-- `CLAUDE.md` (updated with actual bottleneck summary)
-
-- [ ] **Step 1: perf stat -d on the stage2 binary**
-
-  ```bash
-  THREADS=$(nproc)
-  INFILE=/tmp/bench_data/bench_large.bin
-  perf stat -d \
-    /tmp/wt_stage2/pbzx \
-    -i "$INFILE" -o /tmp/prof_discard.bz2 \
-    --threads "$THREADS" --block-size 900000 --level 9 \
-    2> /tmp/perf_stat.txt
-  cat /tmp/perf_stat.txt
-  ```
-  Note the `task-clock`, `cache-misses`, `LLC-load-misses`, and `context-switches` values.
-
-- [ ] **Step 2: /usr/bin/time -v (wall time + peak RSS + CPU %)**
-
-  ```bash
-  /usr/bin/time -v \
-    /tmp/wt_stage2/pbzx \
-    -i /tmp/bench_data/bench_large.bin \
-    -o /tmp/prof_discard.bz2 \
-    --threads $(nproc) --block-size 900000 --level 9 \
-    2> /tmp/time_v.txt
-  cat /tmp/time_v.txt
-  ```
-
-- [ ] **Step 3: perf record + perf report (call-graph hotspots)**
-
-  ```bash
-  perf record -g -o /tmp/perf.data \
-    /tmp/wt_stage2/pbzx \
-    -i /tmp/bench_data/bench_large.bin \
-    -o /tmp/prof_discard.bz2 \
-    --threads $(nproc) --block-size 900000 --level 9
-
-  perf report --stdio --no-children -i /tmp/perf.data \
-    > /tmp/perf_report.txt 2>&1
-  head -60 /tmp/perf_report.txt
-  ```
-  Note the top 5–10 functions and their `%` share.
-
-- [ ] **Step 4: Collect thread-scaling data**
-
-  ```bash
-  INFILE=/tmp/bench_data/bench_large.bin
-  {
-    echo "threads,mean_compress_seconds"
-    for t in 1 2 4 8 $(nproc); do
-      python3 /tmp/wt_stage2/bench/run_bench.py \
-        --pbzx /tmp/wt_stage2/pbzx \
-        --inputs "$INFILE" \
-        --threads "$t" \
-        --repeat 3 \
-        --out /tmp/scale_s2_t${t}.csv \
-        --time-bin /usr/bin/time > /dev/null
-      python3 -c "
-  import csv
-  rows = list(csv.DictReader(open('/tmp/scale_s2_t${t}.csv')))
-  avg = sum(float(r['compress_seconds']) for r in rows) / len(rows)
-  print(f'${t},{avg:.4f}')
-  "
-    done
-  } > /tmp/scaling.txt
-  cat /tmp/scaling.txt
-  ```
-
-- [ ] **Step 5: Add profiling files and update CLAUDE.md on stage/3-profiling**
-
-  Create a worktree for stage/3-profiling, copy the profiling data in, and rewrite
-  the CLAUDE.md with actual bottleneck numbers:
-
-  ```bash
-  git worktree add /tmp/wt_stage3 stage/3-profiling
-  cp /tmp/perf_stat.txt /tmp/time_v.txt /tmp/perf_report.txt /tmp/scaling.txt \
-     /tmp/wt_stage3/profiling/
-  ```
-
-  Then edit `/tmp/wt_stage3/CLAUDE.md` — replace the placeholder section under
-  "Profiling data from a prior parallel implementation" with:
-
-  ```markdown
-  ## Profiling data from a prior parallel implementation (Stage 2 output)
-
-  ### Thread scaling
-  [paste contents of profiling/scaling.txt]
-
-  ### Top CPU hotspots (perf report top 10)
-  [paste top-10 lines from profiling/perf_report.txt]
-
-  ### Hardware counters (perf stat -d)
-  [paste task-clock, cache-misses, LLC-load-misses, context-switches lines]
-
-  ### Peak memory + CPU utilization (/usr/bin/time -v)
-  [paste Maximum resident set size and Percent of CPU lines]
-  ```
-
-- [ ] **Step 6: Commit profiling data on stage/3-profiling**
-
-  ```bash
-  cd /tmp/wt_stage3
-  git add profiling/ CLAUDE.md
-  git commit -m "chore: add stage2 profiling data to stage3 context"
-  git push origin stage/3-profiling
-  ```
-
-- [ ] **Step 7: Remove worktrees**
-
-  ```bash
-  cd /path/to/Final_Project
-  git worktree remove /tmp/wt_stage2
-  git worktree remove /tmp/wt_stage3
-  ```
-
----
-
-## Task 8: Stage 3 — Run Profiling-guided Agent on branch stage/3-profiling
+## Task 7: Stage 3 — Run Profiling-guided Agent on branch stage/3-profiling
 
 Open a worktree for `stage/3-profiling`. Like stages 1 and 2, it starts from the
-sequential baseline source. The difference is the prompt: the CLAUDE.md embeds
-profiling data from Stage 2's output so the agent knows the bottlenecks before it
-starts. The agent also has full permission to run profiling tools on its own
-implementation at any time.
+sequential baseline source. The difference is what the agent is allowed to do: it
+may run `perf`, `valgrind`, `/usr/bin/time`, `strace`, and any other profiling tool
+on its own implementation, then use those measurements to guide further changes.
+The agent iterates through multiple rounds of profile → optimize → verify.
 
 **Files modified by agent (expected, on branch stage/3-profiling):**
 - `src/main.c` and other `src/*.c` files
@@ -685,48 +556,46 @@ implementation at any time.
 **Files created by this task:**
 - `results/stage3_results.csv` (committed on `stage/3-profiling`)
 
-- [ ] **Step 1: Create git worktree for stage/3-profiling**
+- [ ] **Step 1: Remove stage2 worktree if still present**
+
+  ```bash
+  git worktree remove /tmp/wt_stage2 2>/dev/null || true
+  ```
+
+- [ ] **Step 2: Create git worktree for stage/3-profiling**
 
   ```bash
   git worktree add /tmp/wt_stage3 stage/3-profiling
   cd /tmp/wt_stage3 && make libbz2.a 2>/dev/null || make all
   ```
 
-- [ ] **Step 2: Verify the starting state compiles and passes correctness**
+- [ ] **Step 3: Verify baseline compiles**
 
   ```bash
   cd /tmp/wt_stage3
   make clean && make all
   python3 bench/verify.py ./pbzx /tmp/bench_data/bench_large.bin
   ```
-  Expected: `PASS` (stage3 initially has stage2 source, already known-good).
+  Expected: `PASS` (sequential baseline, same as the other two stages at start).
 
-- [ ] **Step 3: [HUMAN STEP] Launch Stage 3 agent session**
+- [ ] **Step 4: [HUMAN STEP] Launch Stage 3 agent session**
 
   ```bash
   cd /tmp/wt_stage3
   claude
   ```
 
-  Paste this prompt (with actual bottleneck numbers filled in from Task 7's profiling output):
+  Type **exactly this prompt**:
   ```
-  The profiling results for the current parallel implementation show:
-
-  [PASTE KEY FINDINGS — examples based on what profiling showed:]
-  - Thread scaling plateaus after N threads: speedup at 8t=X.Xx, 16t=X.Xx (from profiling/scaling.txt)
-  - Top CPU hotspot: BZ2_blockSort at ~XX% of samples (from profiling/perf_report.txt)
-  - Lock/mutex contention appears at ~X% of samples
-  - Peak RSS: XXX MB with N threads (from profiling/time_v.txt)
-  - LLC cache miss rate: XX% (from profiling/perf_stat.txt)
-
-  Please optimize the parallel design to address these bottlenecks while preserving
-  correctness. You have permission to run perf, valgrind, /usr/bin/time, gprof,
-  or any other profiling tool on ./pbzx at any point to guide your changes.
+  Please parallelize this bzip2 compression program using multiple threads,
+  then use profiling tools to measure bottlenecks in your implementation and
+  improve it. Repeat the profile → optimize → verify cycle until you are
+  satisfied with the performance.
   ```
 
-  Let the agent profile, modify, rebuild, re-profile, and iterate. Exit when done.
+  Let the agent implement, profile, modify, re-profile, and iterate. Exit when done.
 
-- [ ] **Step 4: Final build and correctness check**
+- [ ] **Step 5: Final build and correctness check**
 
   ```bash
   cd /tmp/wt_stage3
@@ -773,12 +642,28 @@ implementation at any time.
   "
   ```
 
+- [ ] **Step 6: Run benchmark sweep**
+
+  ```bash
+  cd /tmp/wt_stage3
+  python3 bench/run_bench.py \
+    --pbzx ./pbzx \
+    --inputs /tmp/bench_data/bench_large.bin \
+    --threads 1 2 4 8 $(nproc) \
+    --block-sizes 900000 \
+    --level 9 \
+    --repeat 3 \
+    --out results/stage3_results.csv \
+    --time-bin /usr/bin/time
+  ```
+
 - [ ] **Step 7: Commit stage3 work on its branch**
 
   ```bash
   cd /tmp/wt_stage3
   git add src/ Makefile results/
-  git commit -m "feat: stage3 profiling-guided AI optimization + benchmark results"
+  git commit -m "feat: stage3 profiling-guided AI parallelization + benchmark results"
+  git push origin stage/3-profiling
   ```
 
 - [ ] **Step 8: Remove stage3 worktree**
@@ -999,12 +884,12 @@ one CSV, and generate comparison plots.
 | Stage 2: agent discovers machine spec via lscpu etc. | Task 6 Step 2 + CLAUDE.md on `stage/2-constrained` |
 | Stage 3: full profiling tool permission | Task 8 Step 3 + CLAUDE.md on `stage/3-profiling` |
 | Each stage on its own branch | `stage/1-naive`, `stage/2-constrained`, `stage/3-profiling` |
-| Stage 3 informed by Stage 2's profiling | Task 7 — profiling data added to `stage/3-profiling` CLAUDE.md; source starts from baseline |
+| Stage 3 uses own profiling tools iteratively | Task 7 — agent runs perf/valgrind/etc. on its own implementation in a profile→optimize loop |
 
 ### Branch lineage verified
 - `stage/1-naive` ← `feat/baseline-harness` (sequential baseline source)
 - `stage/2-constrained` ← `feat/baseline-harness` (sequential baseline source)
-- `stage/3-profiling` ← `feat/baseline-harness` (sequential baseline source; profiling data added to CLAUDE.md in Task 7)
+- `stage/3-profiling` ← `feat/baseline-harness` (sequential baseline source; agent does its own profiling iterations)
 
 ### No placeholders — all steps have concrete commands.
 
