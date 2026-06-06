@@ -1,37 +1,26 @@
 # pbzx Stage 3: Profiling-guided AI Parallelization
 
 This is a sequential bzip2 compression tool called pbzx. Your goal is to
-parallelize it, using profiling data from a prior parallel implementation
-as guidance for your design decisions.
+parallelize it and iteratively optimize it using profiling tools.
 
 ## Your task
 
-Please parallelize this bzip2 compression program using multiple threads.
-Use the profiling data below to avoid known bottlenecks from the start.
-You may also run profiling tools on your own implementation at any time.
+Please parallelize this bzip2 compression program using multiple threads,
+then use profiling tools to measure bottlenecks in your own implementation
+and improve it. Repeat the profile → optimize → verify cycle until you are
+satisfied with the performance.
 
-## Profiling data from a prior parallel implementation
+## Permitted profiling tools
 
-> [This section will be filled in with actual profiling findings before this
-> agent session is opened. See `profiling/` directory for the raw data files.]
-
-Raw profiling files are in `profiling/`:
-
-| File | Contents |
-|------|----------|
-| `profiling/perf_stat.txt` | `perf stat -d` output — hardware counters |
-| `profiling/time_v.txt` | `/usr/bin/time -v` — wall time, peak RSS, CPU% |
-| `profiling/perf_report.txt` | `perf report --stdio` — call-graph hotspots |
-| `profiling/scaling.txt` | Mean compress time at 1/2/4/8/N threads |
-
-## Permitted profiling tools (run these on `./pbzx` at any time)
+You have full permission to run any of these on `./pbzx` at any time:
 
 - `perf stat -d ./pbzx ...` — hardware performance counters
-- `perf record -g ./pbzx ... && perf report` — call-graph flame data
+- `perf record -g ./pbzx ... && perf report` — call-graph hotspots
 - `valgrind --tool=callgrind ./pbzx ...` — instruction-level profiling
 - `valgrind --tool=massif ./pbzx ...` — heap memory profiling
-- `/usr/bin/time -v ./pbzx ...` — wall time + peak RSS
+- `/usr/bin/time -v ./pbzx ...` — wall time + peak RSS + CPU%
 - `strace -c ./pbzx ...` — system call summary
+- `lscpu`, `nproc`, `free -h`, `getconf -a | grep -i cache` — machine info
 
 ## Source files you may modify
 
@@ -62,7 +51,7 @@ Produces: `./pbzx`
 python3 bench/verify.py ./pbzx <input_file>
 ```
 
-Expected: `PASS  <input_file>`
+Expected: `PASS  <input_file>` — verify after every optimization round.
 
 ## Benchmark
 
