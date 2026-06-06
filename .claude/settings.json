@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(make *)",
+      "Bash(git *)",
+      "Bash(python3 *)",
+      "Bash(./pbzx *)",
+      "Bash(bunzip2 *)",
+      "Bash(dd *)",
+      "Bash(ls *)",
+      "Bash(cat src/*)",
+      "Bash(cat Makefile)"
+    ],
+    "deny": [
+      "Bash(lscpu)",
+      "Bash(nproc)",
+      "Bash(free *)",
+      "Bash(getconf *)",
+      "Bash(perf *)",
+      "Bash(valgrind *)",
+      "Bash(gprof *)",
+      "Bash(strace *)"
+    ]
+  }
+}
