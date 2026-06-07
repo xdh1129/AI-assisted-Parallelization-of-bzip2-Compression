@@ -21,6 +21,10 @@
 
 #include "bzlib_private.h"
 
+#if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
+#include "cuda/blocksort_cuda.h"
+#endif
+
 /*---------------------------------------------*/
 /*--- Fallback O(N log(N)^2) sorting        ---*/
 /*--- algorithm, for repetitive blocks      ---*/
@@ -1044,6 +1048,13 @@ void BZ2_blockSort ( EState* s )
    if (nblock < 10000) {
       fallbackSort ( s->arr1, s->arr2, ftab, nblock, verb );
    } else {
+#if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
+      if (BZ2_cudaBlockSort ( ptr, block, nblock, verb )) {
+         if (verb >= 3)
+            VPrintf1 ( "      CUDA blocksort sorted %d rotations\n", nblock );
+      } else
+#endif
+      {
       /* Calculate the location for quadrant, remembering to get
          the alignment right.  Assumes that &(block[0]) is at least
          2-byte aligned -- this should be ok since block is really
@@ -1077,6 +1088,7 @@ void BZ2_blockSort ( EState* s )
             VPrintf0 ( "    too repetitive; using fallback"
                        " sorting algorithm\n" );
          fallbackSort ( s->arr1, s->arr2, ftab, nblock, verb );
+      }
       }
    }
 

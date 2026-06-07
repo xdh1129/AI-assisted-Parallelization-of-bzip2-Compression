@@ -35,6 +35,14 @@ set(ENABLE_EXAMPLES_DEFAULT OFF)
 set(ENABLE_DOCS_DEFAULT OFF)
 include(CMakeOptions.txt)
 
+option(ENABLE_CUDA "Build optional CUDA block sorting acceleration" OFF)
+if(ENABLE_CUDA)
+    enable_language(CUDA)
+    find_package(CUDAToolkit REQUIRED)
+    set(CMAKE_CUDA_STANDARD 14)
+    set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+endif()
+
 if(ENABLE_LIB_ONLY AND (ENABLE_APP OR ENABLE_EXAMPLES))
     # Remember when disabled options are disabled for later diagnostics.
     set(ENABLE_LIB_ONLY_DISABLED_OTHERS 1)
@@ -279,12 +287,29 @@ set(BZ2_SOURCES
     decompress.c
     bzlib.c)
 
+if(ENABLE_CUDA)
+    list(APPEND BZ2_SOURCES
+        cuda/blocksort_cuda.cu)
+endif()
+
+function(configure_bz2_cuda target_name)
+    if(ENABLE_CUDA)
+        target_compile_definitions(${target_name} PRIVATE BZ2_ENABLE_CUDA=1)
+        target_include_directories(${target_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+        target_link_libraries(${target_name} PRIVATE CUDA::cudart)
+        set_target_properties(${target_name} PROPERTIES
+            CUDA_STANDARD 14
+            CUDA_STANDARD_REQUIRED ON)
+    endif()
+endfunction()
+
 # The bz2 OBJECT-library, required for bzip2, bzip2recover.
 add_library(bz2_ObjLib OBJECT)
 target_sources(bz2_ObjLib
     PRIVATE   ${BZ2_SOURCES}
     PUBLIC    ${CMAKE_CURRENT_SOURCE_DIR}/bzlib_private.h
     INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/bzlib.h)
+configure_bz2_cuda(bz2_ObjLib)
 
 # Windows resource file
 set(BZ2_RES "")
@@ -312,6 +337,7 @@ if(ENABLE_SHARED_LIB)
     set_target_properties(bz2 PROPERTIES
         COMPILE_FLAGS "${WARNCFLAGS}"
         VERSION ${LT_VERSION} SOVERSION ${LT_SOVERSION})
+    configure_bz2_cuda(bz2)
     install(TARGETS bz2 DESTINATION ${CMAKE_INSTALL_LIBDIR})
     install(FILES bzlib.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
@@ -332,6 +358,7 @@ if(ENABLE_SHARED_LIB)
                 VERSION ${LT_SOVERSION}.${LT_AGE} SOVERSION ${LT_SOVERSION}.${LT_AGE}
                 OUTPUT_NAME bz2
             )
+            configure_bz2_cuda(bz2_old_soname)
             install(TARGETS bz2_old_soname DESTINATION ${CMAKE_INSTALL_LIBDIR})
         endif()
     endif()
@@ -356,6 +383,7 @@ if(ENABLE_STATIC_LIB)
         VERSION             ${LT_VERSION}
         SOVERSION           ${LT_SOVERSION}
         ARCHIVE_OUTPUT_NAME bz2_static)
+    configure_bz2_cuda(bz2_static)
     target_compile_definitions(bz2_static PUBLIC BZ2_STATICLIB)
     install(TARGETS bz2_static DESTINATION ${CMAKE_INSTALL_LIBDIR})
     install(FILES bzlib.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
@@ -368,6 +396,7 @@ if(ENABLE_APP)
         PRIVATE   bzip2.c)
     target_link_libraries(bzip2
         PRIVATE   bz2_ObjLib)
+    configure_bz2_cuda(bzip2)
     if(WIN32)
         target_compile_definitions(bzip2 PUBLIC BZ_LCCWIN32 BZ_UNIX=0)
     else()
@@ -386,6 +415,7 @@ if(ENABLE_APP)
         PRIVATE   bzip2recover.c)
     target_link_libraries(bzip2recover
         PRIVATE bz2_ObjLib)
+    configure_bz2_cuda(bzip2recover)
     if(WIN32)
         target_compile_definitions(bzip2recover PUBLIC BZ_LCCWIN32 BZ_UNIX=0)
     else()
@@ -465,6 +495,7 @@ message(STATUS "Summary of build options:
     Features:
         Applications:   ${ENABLE_APP}
         Examples:       ${ENABLE_EXAMPLES}
+        CUDA:           ${ENABLE_CUDA}
 ")
 if(ENABLE_LIB_ONLY_DISABLED_OTHERS)
     message("Only the library will be built. To build other components "

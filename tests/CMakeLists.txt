@@ -64,6 +64,14 @@ else()
     set_property(TEST quick PROPERTY ENVIRONMENT ${ENVIRONMENT})
 endif()
 
+add_test(NAME cuda_config COMMAND ${PythonTest_COMMAND};cuda_config_test.py
+         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+set_property(TEST cuda_config PROPERTY ENVIRONMENT ${ENVIRONMENT})
+
+add_test(NAME cuda_roundtrip COMMAND ${PythonTest_COMMAND};cuda_roundtrip_test.py
+         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+set_property(TEST cuda_roundtrip PROPERTY ENVIRONMENT ${ENVIRONMENT})
+
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/input/bzip2-testfiles/README.md)
     add_test(NAME large COMMAND ${PythonTest_COMMAND};large_test.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
