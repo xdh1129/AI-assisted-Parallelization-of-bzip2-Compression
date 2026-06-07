@@ -1,5 +1,5 @@
 CC      ?= cc
-CFLAGS  ?= -O2 -Wall -Wextra -std=c11
+CFLAGS  ?= -O2 -Wall -Wextra -std=c11 -fopenmp
 BZDIR    = third_party/bzip2
 BZSRC    = $(BZDIR)/blocksort.c $(BZDIR)/huffman.c $(BZDIR)/crctable.c \
            $(BZDIR)/randtable.c $(BZDIR)/compress.c $(BZDIR)/decompress.c \

@@ -2,6 +2,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 #include "args.h"
 #include "block_reader.h"
 #include "bz_block.h"
@@ -43,18 +46,25 @@ int main(int argc, char **argv) {
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
     int err = 0;
-    /* Sequential path. To parallelize, add `#pragma omp parallel for` here:
-     * each iteration writes only its own comp[i] slot (no shared writes), which
-     * is safe. But two things below are NOT OpenMP-safe and must change first:
-     *   - the `break` on error is illegal in an omp for; replace it with an
-     *     `if (!err)` guard per iteration, setting err via `#pragma omp atomic`;
-     *   - input_bytes is deliberately summed above, not here, to avoid a
-     *     loop-carried reduction. */
+    /* Parallel path. Each iteration writes only its own comp[i] slot (no shared
+     * writes), so blocks compress independently across threads. Two adaptations
+     * make the loop OpenMP-safe:
+     *   - the original `break` on error is illegal in an omp for; instead each
+     *     iteration is guarded by `if (!err)` and sets err via `#pragma omp
+     *     atomic write`. We can't stop early, but later iterations skip the work;
+     *   - input_bytes is summed above, not here, to avoid a loop-carried
+     *     reduction. */
+#ifdef _OPENMP
+    omp_set_num_threads(opt.threads);
+#endif
+    #pragma omp parallel for schedule(dynamic)
     for (size_t i = 0; i < n; i++) {
+        if (err) continue;
         const uint8_t *src = empty_input ? NULL : blocks[i].data;
         size_t len = empty_input ? 0 : blocks[i].len;
         if (compress_block(src, len, opt.level, &comp[i].data, &comp[i].len) != 0) {
-            err = 1; break;
+            #pragma omp atomic write
+            err = 1;
         }
     }
     clock_gettime(CLOCK_MONOTONIC, &t1);
