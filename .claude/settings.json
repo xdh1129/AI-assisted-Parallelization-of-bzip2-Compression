@@ -1,6 +1,9 @@
 {
   "permissions": {
     "allow": [
+      "Edit(src/**)",
+      "Write(src/**)",
+      "Edit(Makefile)",
       "Bash(make *)",
       "Bash(git *)",
       "Bash(python3 *)",

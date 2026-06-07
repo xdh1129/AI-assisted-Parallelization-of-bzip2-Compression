@@ -7,13 +7,16 @@ BZSRC    = $(BZDIR)/blocksort.c $(BZDIR)/huffman.c $(BZDIR)/crctable.c \
 BZOBJ    = $(BZSRC:.c=.o)
 LIBBZ2   = libbz2.a
 
-SRC      = src/args.c src/block_reader.c src/bz_block.c src/writer.c src/main.c
+SRC      = src/args.c src/block_reader.c src/bz_block.c src/writer.c \
+           src/pipeline.c src/main.c
 OBJ      = $(SRC:.c=.o)
 BIN      = pbzx
 
 # bzip2's own sources are old C; do not enable -Wextra/-Werror on them.
 BZ_CFLAGS   = -O2 -D_FILE_OFFSET_BITS=64 -Wall
-PBZX_CFLAGS = $(CFLAGS) -I$(BZDIR)
+# -pthread for the worker pool; _POSIX_C_SOURCE exposes clock_gettime/sysconf
+# under strict -std=c11.
+PBZX_CFLAGS = $(CFLAGS) -I$(BZDIR) -D_POSIX_C_SOURCE=200809L -pthread
 
 C_TESTS = tests/test_libbz2 tests/test_args tests/test_block_reader \
           tests/test_bz_block tests/test_writer
