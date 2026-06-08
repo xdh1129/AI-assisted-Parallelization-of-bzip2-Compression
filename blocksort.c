@@ -1049,7 +1049,8 @@ void BZ2_blockSort ( EState* s )
       fallbackSort ( s->arr1, s->arr2, ftab, nblock, verb );
    } else {
 #if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
-      if (BZ2_cudaBlockSort ( ptr, block, nblock, verb )) {
+      if (BZ2_cudaBlockSort ( &(s->cudaBlockSortWorkspace),
+                              ptr, block, nblock, verb )) {
          if (verb >= 3)
             VPrintf1 ( "      CUDA blocksort sorted %d rotations\n", nblock );
       } else

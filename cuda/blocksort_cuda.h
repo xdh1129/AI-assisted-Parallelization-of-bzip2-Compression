@@ -7,7 +7,13 @@
 extern "C" {
 #endif
 
-Bool BZ2_cudaBlockSort ( UInt32* ptr, UChar* block, Int32 nblock, Int32 verbosity );
+Bool BZ2_cudaBlockSort ( void** workspace,
+                         UInt32* ptr,
+                         UChar* block,
+                         Int32 nblock,
+                         Int32 verbosity );
+
+void BZ2_cudaBlockSortCleanup ( void* workspace );
 
 #ifdef __cplusplus
 }

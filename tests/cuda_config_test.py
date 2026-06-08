@@ -39,6 +39,20 @@ class CUDASurfaceTest(unittest.TestCase):
         self.assertIn('cub::DeviceRadixSort', implementation)
         self.assertIn('cudaMemcpy', implementation)
 
+    def test_cuda_workspace_is_reused_across_blocks(self):
+        private_header = self.read_text('bzlib_private.h')
+        blocksort = self.read_text('blocksort.c')
+        bzlib = self.read_text('bzlib.c')
+        cuda_header = self.read_text('cuda/blocksort_cuda.h')
+        cuda_impl = self.read_text('cuda/blocksort_cuda.cu')
+
+        self.assertIn('void*    cudaBlockSortWorkspace', private_header)
+        self.assertIn('&(s->cudaBlockSortWorkspace)', blocksort)
+        self.assertIn('BZ2_cudaBlockSortCleanup', bzlib)
+        self.assertIn('void BZ2_cudaBlockSortCleanup', cuda_header)
+        self.assertIn('ensure_workspace_capacity', cuda_impl)
+        self.assertIn('workspace->capacity', cuda_impl)
+
 
 if __name__ == '__main__':
     unittest.main()

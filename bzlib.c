@@ -30,6 +30,9 @@
 
 #include "bzlib_private.h"
 #include "bz_version.h"
+#if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
+#include "cuda/blocksort_cuda.h"
+#endif
 
 
 /*---------------------------------------------------*/
@@ -196,6 +199,9 @@ int BZ_API(BZ2_bzCompressInit)
    s->nblockMAX         = 100000 * blockSize100k - 19;
    s->verbosity         = verbosity;
    s->workFactor        = workFactor;
+#if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
+   s->cudaBlockSortWorkspace = NULL;
+#endif
 
    s->block             = (UChar*)s->arr2;
    s->mtfv              = (UInt16*)s->arr1;
@@ -475,6 +481,9 @@ int BZ_API(BZ2_bzCompressEnd)  ( bz_stream *strm )
    if (s == NULL) return BZ_PARAM_ERROR;
    if (s->strm != strm) return BZ_PARAM_ERROR;
 
+#if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
+   BZ2_cudaBlockSortCleanup ( s->cudaBlockSortWorkspace );
+#endif
    if (s->arr1 != NULL) BZFREE(s->arr1);
    if (s->arr2 != NULL) BZFREE(s->arr2);
    if (s->ftab != NULL) BZFREE(s->ftab);

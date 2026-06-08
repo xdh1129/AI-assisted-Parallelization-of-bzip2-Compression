@@ -219,6 +219,11 @@ typedef
       /* for deciding when to use the fallback sorting algorithm */
       Int32    workFactor;
 
+#if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
+      /* reusable CUDA blocksort buffers, owned by this compression state */
+      void*    cudaBlockSortWorkspace;
+#endif
+
       /* run-length-encoding of the input */
       UInt32   state_in_ch;
       Int32    state_in_len;

@@ -12,6 +12,23 @@ const unsigned int kIndexBits = 21U;
 const unsigned long long kIndexMask = (1ULL << kIndexBits) - 1ULL;
 const int kThreadsPerBlock = 256;
 
+struct CudaBlockSortWorkspace {
+   UChar* d_block;
+   UInt32* d_rank_a;
+   UInt32* d_rank_b;
+   UInt32* d_indices_in;
+   UInt32* d_indices_out;
+   UInt32* d_flags;
+   UInt32* d_rank_by_pos;
+   unsigned long long* d_keys_in;
+   unsigned long long* d_keys_out;
+   void* sort_temp;
+   void* scan_temp;
+   size_t sort_temp_bytes;
+   size_t scan_temp_bytes;
+   size_t capacity;
+};
+
 __device__ __host__
 unsigned long long pack_key ( UInt32 firstRank, UInt32 secondRank, UInt32 index )
 {
@@ -98,29 +115,165 @@ Int32 grid_size ( Int32 nblock )
    return (nblock + kThreadsPerBlock - 1) / kThreadsPerBlock;
 }
 
+void release_temp_buffers ( CudaBlockSortWorkspace* workspace )
+{
+   cudaFree ( workspace->scan_temp );
+   cudaFree ( workspace->sort_temp );
+   workspace->scan_temp = NULL;
+   workspace->sort_temp = NULL;
+   workspace->scan_temp_bytes = 0;
+   workspace->sort_temp_bytes = 0;
+}
+
+void release_device_buffers ( CudaBlockSortWorkspace* workspace )
+{
+   release_temp_buffers ( workspace );
+   cudaFree ( workspace->d_keys_out );
+   cudaFree ( workspace->d_keys_in );
+   cudaFree ( workspace->d_rank_by_pos );
+   cudaFree ( workspace->d_flags );
+   cudaFree ( workspace->d_indices_out );
+   cudaFree ( workspace->d_indices_in );
+   cudaFree ( workspace->d_rank_b );
+   cudaFree ( workspace->d_rank_a );
+   cudaFree ( workspace->d_block );
+
+   workspace->d_keys_out = NULL;
+   workspace->d_keys_in = NULL;
+   workspace->d_rank_by_pos = NULL;
+   workspace->d_flags = NULL;
+   workspace->d_indices_out = NULL;
+   workspace->d_indices_in = NULL;
+   workspace->d_rank_b = NULL;
+   workspace->d_rank_a = NULL;
+   workspace->d_block = NULL;
+   workspace->capacity = 0;
+}
+
+Bool allocate_device_buffers ( CudaBlockSortWorkspace* workspace,
+                               Int32 nblock,
+                               Int32 verbosity )
+{
+   size_t uchar_bytes = (size_t)nblock * sizeof(UChar);
+   size_t uint_bytes = (size_t)nblock * sizeof(UInt32);
+   size_t key_bytes = (size_t)nblock * sizeof(unsigned long long);
+
+   if (!check_cuda ( cudaMalloc ( (void**)&workspace->d_block, uchar_bytes ),
+                     "cudaMalloc(block)", verbosity )) return False;
+   if (!check_cuda ( cudaMalloc ( (void**)&workspace->d_rank_a, uint_bytes ),
+                     "cudaMalloc(rank_a)", verbosity )) return False;
+   if (!check_cuda ( cudaMalloc ( (void**)&workspace->d_rank_b, uint_bytes ),
+                     "cudaMalloc(rank_b)", verbosity )) return False;
+   if (!check_cuda ( cudaMalloc ( (void**)&workspace->d_indices_in, uint_bytes ),
+                     "cudaMalloc(indices_in)", verbosity )) return False;
+   if (!check_cuda ( cudaMalloc ( (void**)&workspace->d_indices_out, uint_bytes ),
+                     "cudaMalloc(indices_out)", verbosity )) return False;
+   if (!check_cuda ( cudaMalloc ( (void**)&workspace->d_flags, uint_bytes ),
+                     "cudaMalloc(flags)", verbosity )) return False;
+   if (!check_cuda ( cudaMalloc ( (void**)&workspace->d_rank_by_pos, uint_bytes ),
+                     "cudaMalloc(rank_by_pos)", verbosity )) return False;
+   if (!check_cuda ( cudaMalloc ( (void**)&workspace->d_keys_in, key_bytes ),
+                     "cudaMalloc(keys_in)", verbosity )) return False;
+   if (!check_cuda ( cudaMalloc ( (void**)&workspace->d_keys_out, key_bytes ),
+                     "cudaMalloc(keys_out)", verbosity )) return False;
+
+   workspace->capacity = (size_t)nblock;
+   return True;
+}
+
+Bool ensure_workspace_capacity ( void** opaqueWorkspace,
+                                 Int32 nblock,
+                                 Int32 verbosity )
+{
+   CudaBlockSortWorkspace* workspace;
+
+   if (opaqueWorkspace == NULL) return False;
+
+   workspace = (CudaBlockSortWorkspace*)(*opaqueWorkspace);
+   if (workspace == NULL) {
+      workspace = (CudaBlockSortWorkspace*)calloc ( 1, sizeof(CudaBlockSortWorkspace) );
+      if (workspace == NULL) return False;
+      *opaqueWorkspace = workspace;
+   }
+
+   if (workspace->capacity >= (size_t)nblock) return True;
+
+   release_device_buffers ( workspace );
+   if (!allocate_device_buffers ( workspace, nblock, verbosity )) {
+      release_device_buffers ( workspace );
+      return False;
+   }
+
+   if (verbosity >= 3)
+      fprintf ( stderr, "      CUDA blocksort workspace capacity is %d bytes\n",
+                nblock );
+
+   return True;
+}
+
+Bool ensure_temp_capacity ( CudaBlockSortWorkspace* workspace,
+                            Int32 nblock,
+                            Int32 verbosity )
+{
+   size_t required_sort_temp_bytes = 0;
+   size_t required_scan_temp_bytes = 0;
+
+   if (!check_cuda (
+          cub::DeviceRadixSort::SortPairs ( NULL, required_sort_temp_bytes,
+                                            workspace->d_keys_in,
+                                            workspace->d_keys_out,
+                                            workspace->d_indices_in,
+                                            workspace->d_indices_out,
+                                            nblock, 0, 64 ),
+          "cub::DeviceRadixSort::SortPairs(size)", verbosity ))
+      return False;
+   if (!check_cuda (
+          cub::DeviceScan::InclusiveSum ( NULL, required_scan_temp_bytes,
+                                          workspace->d_flags,
+                                          workspace->d_rank_by_pos,
+                                          nblock ),
+          "cub::DeviceScan::InclusiveSum(size)", verbosity ))
+      return False;
+
+   if (workspace->sort_temp_bytes < required_sort_temp_bytes) {
+      cudaFree ( workspace->sort_temp );
+      workspace->sort_temp = NULL;
+      workspace->sort_temp_bytes = 0;
+      if (!check_cuda ( cudaMalloc ( &workspace->sort_temp,
+                                     required_sort_temp_bytes ),
+                        "cudaMalloc(sort_temp)", verbosity ))
+         return False;
+      workspace->sort_temp_bytes = required_sort_temp_bytes;
+   }
+
+   if (workspace->scan_temp_bytes < required_scan_temp_bytes) {
+      cudaFree ( workspace->scan_temp );
+      workspace->scan_temp = NULL;
+      workspace->scan_temp_bytes = 0;
+      if (!check_cuda ( cudaMalloc ( &workspace->scan_temp,
+                                     required_scan_temp_bytes ),
+                        "cudaMalloc(scan_temp)", verbosity ))
+         return False;
+      workspace->scan_temp_bytes = required_scan_temp_bytes;
+   }
+
+   return True;
+}
+
 } /* namespace */
 
 extern "C"
-Bool BZ2_cudaBlockSort ( UInt32* ptr, UChar* block, Int32 nblock, Int32 verbosity )
+Bool BZ2_cudaBlockSort ( void** opaqueWorkspace,
+                         UInt32* ptr,
+                         UChar* block,
+                         Int32 nblock,
+                         Int32 verbosity )
 {
-   UChar* d_block = NULL;
-   UInt32* d_rank_a = NULL;
-   UInt32* d_rank_b = NULL;
-   UInt32* d_indices_in = NULL;
-   UInt32* d_indices_out = NULL;
-   UInt32* d_flags = NULL;
-   UInt32* d_rank_by_pos = NULL;
-   unsigned long long* d_keys_in = NULL;
-   unsigned long long* d_keys_out = NULL;
-   void* sort_temp = NULL;
-   void* scan_temp = NULL;
-   size_t sort_temp_bytes = 0;
-   size_t scan_temp_bytes = 0;
+   CudaBlockSortWorkspace* workspace;
    UInt32 max_rank = 0;
    Int32 device_count = 0;
    Int32 blocks = grid_size ( nblock );
    Int32 step;
-   Bool ok = False;
 
    if (ptr == NULL || block == NULL || nblock <= 0) return False;
    if (nblock >= (Int32)(1U << kIndexBits)) return False;
@@ -135,118 +288,92 @@ Bool BZ2_cudaBlockSort ( UInt32* ptr, UChar* block, Int32 nblock, Int32 verbosit
       return False;
    if (device_count <= 0) return False;
 
-   if (!check_cuda ( cudaMalloc ( (void**)&d_block, (size_t)nblock * sizeof(UChar) ),
-                     "cudaMalloc(block)", verbosity )) goto cleanup;
-   if (!check_cuda ( cudaMalloc ( (void**)&d_rank_a, (size_t)nblock * sizeof(UInt32) ),
-                     "cudaMalloc(rank_a)", verbosity )) goto cleanup;
-   if (!check_cuda ( cudaMalloc ( (void**)&d_rank_b, (size_t)nblock * sizeof(UInt32) ),
-                     "cudaMalloc(rank_b)", verbosity )) goto cleanup;
-   if (!check_cuda ( cudaMalloc ( (void**)&d_indices_in, (size_t)nblock * sizeof(UInt32) ),
-                     "cudaMalloc(indices_in)", verbosity )) goto cleanup;
-   if (!check_cuda ( cudaMalloc ( (void**)&d_indices_out, (size_t)nblock * sizeof(UInt32) ),
-                     "cudaMalloc(indices_out)", verbosity )) goto cleanup;
-   if (!check_cuda ( cudaMalloc ( (void**)&d_flags, (size_t)nblock * sizeof(UInt32) ),
-                     "cudaMalloc(flags)", verbosity )) goto cleanup;
-   if (!check_cuda ( cudaMalloc ( (void**)&d_rank_by_pos, (size_t)nblock * sizeof(UInt32) ),
-                     "cudaMalloc(rank_by_pos)", verbosity )) goto cleanup;
-   if (!check_cuda ( cudaMalloc ( (void**)&d_keys_in,
-                                  (size_t)nblock * sizeof(unsigned long long) ),
-                     "cudaMalloc(keys_in)", verbosity )) goto cleanup;
-   if (!check_cuda ( cudaMalloc ( (void**)&d_keys_out,
-                                  (size_t)nblock * sizeof(unsigned long long) ),
-                     "cudaMalloc(keys_out)", verbosity )) goto cleanup;
+   if (!ensure_workspace_capacity ( opaqueWorkspace, nblock, verbosity ))
+      return False;
+   workspace = (CudaBlockSortWorkspace*)(*opaqueWorkspace);
 
-   if (!check_cuda ( cudaMemcpy ( d_block, block, (size_t)nblock * sizeof(UChar),
+   if (!check_cuda ( cudaMemcpy ( workspace->d_block, block,
+                                  (size_t)nblock * sizeof(UChar),
                                   cudaMemcpyHostToDevice ),
-                     "cudaMemcpy(block)", verbosity )) goto cleanup;
+                     "cudaMemcpy(block)", verbosity )) return False;
 
    init_ranks_kernel<<<blocks, kThreadsPerBlock>>>
-      ( d_block, d_rank_a, d_indices_in, nblock );
+      ( workspace->d_block, workspace->d_rank_a, workspace->d_indices_in, nblock );
    if (!check_cuda ( cudaGetLastError (), "init_ranks_kernel", verbosity ))
-      goto cleanup;
+      return False;
 
-   if (!check_cuda (
-          cub::DeviceRadixSort::SortPairs ( NULL, sort_temp_bytes,
-                                            d_keys_in, d_keys_out,
-                                            d_indices_in, d_indices_out,
-                                            nblock, 0, 64 ),
-          "cub::DeviceRadixSort::SortPairs(size)", verbosity ))
-      goto cleanup;
-   if (!check_cuda (
-          cub::DeviceScan::InclusiveSum ( NULL, scan_temp_bytes,
-                                          d_flags, d_rank_by_pos, nblock ),
-          "cub::DeviceScan::InclusiveSum(size)", verbosity ))
-      goto cleanup;
-
-   if (!check_cuda ( cudaMalloc ( &sort_temp, sort_temp_bytes ),
-                     "cudaMalloc(sort_temp)", verbosity )) goto cleanup;
-   if (!check_cuda ( cudaMalloc ( &scan_temp, scan_temp_bytes ),
-                     "cudaMalloc(scan_temp)", verbosity )) goto cleanup;
+   if (!ensure_temp_capacity ( workspace, nblock, verbosity ))
+      return False;
 
    for (step = 1; step < nblock; step <<= 1) {
       build_keys_kernel<<<blocks, kThreadsPerBlock>>>
-         ( d_rank_a, d_keys_in, nblock, step );
+         ( workspace->d_rank_a, workspace->d_keys_in, nblock, step );
       if (!check_cuda ( cudaGetLastError (), "build_keys_kernel", verbosity ))
-         goto cleanup;
+         return False;
 
       if (!check_cuda (
-             cub::DeviceRadixSort::SortPairs ( sort_temp, sort_temp_bytes,
-                                               d_keys_in, d_keys_out,
-                                               d_indices_in, d_indices_out,
+             cub::DeviceRadixSort::SortPairs ( workspace->sort_temp,
+                                               workspace->sort_temp_bytes,
+                                               workspace->d_keys_in,
+                                               workspace->d_keys_out,
+                                               workspace->d_indices_in,
+                                               workspace->d_indices_out,
                                                nblock, 0, 64 ),
              "cub::DeviceRadixSort::SortPairs", verbosity ))
-         goto cleanup;
+         return False;
 
       mark_rank_breaks_kernel<<<blocks, kThreadsPerBlock>>>
-         ( d_keys_out, d_flags, nblock );
+         ( workspace->d_keys_out, workspace->d_flags, nblock );
       if (!check_cuda ( cudaGetLastError (), "mark_rank_breaks_kernel", verbosity ))
-         goto cleanup;
+         return False;
 
       if (!check_cuda (
-             cub::DeviceScan::InclusiveSum ( scan_temp, scan_temp_bytes,
-                                             d_flags, d_rank_by_pos, nblock ),
+             cub::DeviceScan::InclusiveSum ( workspace->scan_temp,
+                                             workspace->scan_temp_bytes,
+                                             workspace->d_flags,
+                                             workspace->d_rank_by_pos,
+                                             nblock ),
              "cub::DeviceScan::InclusiveSum", verbosity ))
-         goto cleanup;
+         return False;
 
       scatter_ranks_kernel<<<blocks, kThreadsPerBlock>>>
-         ( d_indices_out, d_rank_by_pos, d_rank_b, nblock );
+         ( workspace->d_indices_out, workspace->d_rank_by_pos,
+           workspace->d_rank_b, nblock );
       if (!check_cuda ( cudaGetLastError (), "scatter_ranks_kernel", verbosity ))
-         goto cleanup;
+         return False;
 
-      if (!check_cuda ( cudaMemcpy ( &max_rank, d_rank_by_pos + nblock - 1,
+      if (!check_cuda ( cudaMemcpy ( &max_rank,
+                                     workspace->d_rank_by_pos + nblock - 1,
                                      sizeof(UInt32), cudaMemcpyDeviceToHost ),
                         "cudaMemcpy(max_rank)", verbosity ))
-         goto cleanup;
+         return False;
 
       {
-         UInt32* tmp = d_rank_a;
-         d_rank_a = d_rank_b;
-         d_rank_b = tmp;
+         UInt32* tmp = workspace->d_rank_a;
+         workspace->d_rank_a = workspace->d_rank_b;
+         workspace->d_rank_b = tmp;
       }
 
       if (max_rank == (UInt32)(nblock - 1)) break;
       if (step > nblock / 2) break;
    }
 
-   if (!check_cuda ( cudaMemcpy ( ptr, d_indices_out,
+   if (!check_cuda ( cudaMemcpy ( ptr, workspace->d_indices_out,
                                   (size_t)nblock * sizeof(UInt32),
                                   cudaMemcpyDeviceToHost ),
-                     "cudaMemcpy(ptr)", verbosity )) goto cleanup;
+                     "cudaMemcpy(ptr)", verbosity ))
+      return False;
 
-   ok = True;
+   return True;
+}
 
-cleanup:
-   cudaFree ( scan_temp );
-   cudaFree ( sort_temp );
-   cudaFree ( d_keys_out );
-   cudaFree ( d_keys_in );
-   cudaFree ( d_rank_by_pos );
-   cudaFree ( d_flags );
-   cudaFree ( d_indices_out );
-   cudaFree ( d_indices_in );
-   cudaFree ( d_rank_b );
-   cudaFree ( d_rank_a );
-   cudaFree ( d_block );
+extern "C"
+void BZ2_cudaBlockSortCleanup ( void* opaqueWorkspace )
+{
+   CudaBlockSortWorkspace* workspace =
+      (CudaBlockSortWorkspace*)opaqueWorkspace;
 
-   return ok;
+   if (workspace == NULL) return;
+   release_device_buffers ( workspace );
+   free ( workspace );
 }
