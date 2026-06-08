@@ -76,6 +76,10 @@ add_test(NAME cuda_pipeline COMMAND ${PythonTest_COMMAND};cuda_pipeline_test.py
          WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 set_property(TEST cuda_pipeline PROPERTY ENVIRONMENT ${ENVIRONMENT})
 
+add_test(NAME profile COMMAND ${PythonTest_COMMAND};profile_test.py
+         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+set_property(TEST profile PROPERTY ENVIRONMENT ${ENVIRONMENT})
+
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/input/bzip2-testfiles/README.md)
     add_test(NAME large COMMAND ${PythonTest_COMMAND};large_test.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})

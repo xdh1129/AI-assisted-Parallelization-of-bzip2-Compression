@@ -34,6 +34,48 @@
 #include "cuda/blocksort_cuda.h"
 #endif
 
+static
+Bool compress_profile_env_enabled ( void )
+{
+#ifndef BZ_NO_STDIO
+   const char* value;
+   value = getenv ( "BZ2_PROFILE" );
+   return (Bool)(value != NULL && value[0] != 0 &&
+                 !(value[0] == '0' && value[1] == 0));
+#else
+   return False;
+#endif
+}
+
+static
+void init_compress_profile ( EState* s )
+{
+   s->profileEnabled = compress_profile_env_enabled();
+   s->profileBlocks = 0;
+   s->profileBlockSortSeconds = 0.0;
+   s->profileMTFSeconds = 0.0;
+   s->profileHuffmanBitstreamSeconds = 0.0;
+   s->profileCompressBlockSeconds = 0.0;
+}
+
+#ifndef BZ_NO_STDIO
+static
+void print_compress_profile ( EState* s )
+{
+   if (!s->profileEnabled) return;
+
+   fprintf ( stderr,
+             "bzip2-profile: blocks=%d\n"
+             "bzip2-profile: blocksort=%.6fs mtf=%.6fs "
+             "huffman_bitstream=%.6fs compress_block_total=%.6fs\n",
+             s->profileBlocks,
+             s->profileBlockSortSeconds,
+             s->profileMTFSeconds,
+             s->profileHuffmanBitstreamSeconds,
+             s->profileCompressBlockSeconds );
+}
+#endif
+
 
 /*---------------------------------------------------*/
 /*--- Compression stuff                           ---*/
@@ -199,6 +241,7 @@ int BZ_API(BZ2_bzCompressInit)
    s->nblockMAX         = 100000 * blockSize100k - 19;
    s->verbosity         = verbosity;
    s->workFactor        = workFactor;
+   init_compress_profile ( s );
 #if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
    s->cudaBlockSortWorkspace = NULL;
 #endif
@@ -481,6 +524,9 @@ int BZ_API(BZ2_bzCompressEnd)  ( bz_stream *strm )
    if (s == NULL) return BZ_PARAM_ERROR;
    if (s->strm != strm) return BZ_PARAM_ERROR;
 
+#ifndef BZ_NO_STDIO
+   print_compress_profile ( s );
+#endif
 #if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
    BZ2_cudaBlockSortCleanup ( s->cudaBlockSortWorkspace );
 #endif

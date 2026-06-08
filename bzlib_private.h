@@ -224,6 +224,14 @@ typedef
       void*    cudaBlockSortWorkspace;
 #endif
 
+      /* optional internal compression profiling */
+      Bool     profileEnabled;
+      Int32    profileBlocks;
+      double   profileBlockSortSeconds;
+      double   profileMTFSeconds;
+      double   profileHuffmanBitstreamSeconds;
+      double   profileCompressBlockSeconds;
+
       /* run-length-encoding of the input */
       UInt32   state_in_ch;
       Int32    state_in_len;

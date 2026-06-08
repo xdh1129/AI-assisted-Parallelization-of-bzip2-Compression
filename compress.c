@@ -27,11 +27,26 @@
 */
 
 #include "bzlib_private.h"
+#include <time.h>
+#if !defined(_WIN32)
+#include <sys/time.h>
+#endif
 
 
 /*---------------------------------------------------*/
 /*--- Bit stream I/O                              ---*/
 /*---------------------------------------------------*/
+
+static
+double profile_now ( void )
+{
+#if !defined(_WIN32)
+   struct timeval tv;
+   if (gettimeofday ( &tv, NULL ) == 0)
+      return ((double)tv.tv_sec) + (((double)tv.tv_usec) / 1000000.0);
+#endif
+   return ((double)clock()) / ((double)CLOCKS_PER_SEC);
+}
 
 /*---------------------------------------------------*/
 void BZ2_bsInitWrite ( EState* s )
@@ -600,6 +615,16 @@ void sendMTFValues ( EState* s )
 /*---------------------------------------------------*/
 void BZ2_compressBlock ( EState* s, Bool is_last_block )
 {
+   Bool profileBlock;
+   double totalStart;
+   double phaseStart;
+
+   profileBlock = (Bool)(s->profileEnabled && s->nblock > 0);
+   totalStart = 0.0;
+   phaseStart = 0.0;
+
+   if (profileBlock) totalStart = profile_now();
+
    if (s->nblock > 0) {
 
       BZ_FINALISE_CRC ( s->blockCRC );
@@ -612,7 +637,10 @@ void BZ2_compressBlock ( EState* s, Bool is_last_block )
                    "combined CRC = 0x%08x, size = %d\n",
                    s->blockNo, s->blockCRC, s->combinedCRC, s->nblock );
 
+      if (profileBlock) phaseStart = profile_now();
       BZ2_blockSort ( s );
+      if (profileBlock)
+         s->profileBlockSortSeconds += profile_now() - phaseStart;
    }
 
    s->zbits = (UChar*) (&((UChar*)s->arr2)[s->nblock]);
@@ -628,6 +656,7 @@ void BZ2_compressBlock ( EState* s, Bool is_last_block )
 
    if (s->nblock > 0) {
 
+      if (profileBlock) phaseStart = profile_now();
       bsPutUChar ( s, 0x31 ); bsPutUChar ( s, 0x41 );
       bsPutUChar ( s, 0x59 ); bsPutUChar ( s, 0x26 );
       bsPutUChar ( s, 0x53 ); bsPutUChar ( s, 0x59 );
@@ -647,8 +676,18 @@ void BZ2_compressBlock ( EState* s, Bool is_last_block )
       bsW(s,1,0);
 
       bsW ( s, 24, s->origPtr );
+      if (profileBlock)
+         s->profileHuffmanBitstreamSeconds += profile_now() - phaseStart;
+
+      if (profileBlock) phaseStart = profile_now();
       generateMTFValues ( s );
+      if (profileBlock)
+         s->profileMTFSeconds += profile_now() - phaseStart;
+
+      if (profileBlock) phaseStart = profile_now();
       sendMTFValues ( s );
+      if (profileBlock)
+         s->profileHuffmanBitstreamSeconds += profile_now() - phaseStart;
    }
 
 
@@ -662,6 +701,11 @@ void BZ2_compressBlock ( EState* s, Bool is_last_block )
       if (s->verbosity >= 2)
          VPrintf1( "    final combined CRC = 0x%08x\n   ", s->combinedCRC );
       bsFinishWrite ( s );
+   }
+
+   if (profileBlock) {
+      s->profileBlocks++;
+      s->profileCompressBlockSeconds += profile_now() - totalStart;
    }
 }
 
