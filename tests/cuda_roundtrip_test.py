@@ -96,6 +96,36 @@ class CUDARoundtripTest(unittest.TestCase):
             {'BZ2_CUDA_OVERLAP': '1', 'BZ2_DISABLE_CUDA': '1'},
         )
 
+    def test_fast_mtf_output_matches_reference(self):
+        rng = random.Random(24680)
+        data = (
+            bytes(rng.getrandbits(8) for _ in range(2 * 1024 * 1024)) +
+            (bytes(range(256)) * 4096) +
+            (b'fast-mtf-reference-check-' * 32768)
+        )
+        sample = self.path_tmp / 'fast-mtf.bin'
+        sample.write_bytes(data)
+
+        reference = self.run_bzip2(
+            ['--compress', '-9', '--keep', '--stdout', str(sample)],
+            env=os.environ.copy(),
+        )
+        fast_env = os.environ.copy()
+        fast_env['BZ2_FAST_MTF'] = '1'
+        fast = self.run_bzip2(
+            ['--compress', '-9', '--keep', '--stdout', str(sample)],
+            env=fast_env,
+        )
+
+        self.assertEqual(fast, reference)
+        compressed = self.path_tmp / 'fast-mtf.bin.bz2'
+        compressed.write_bytes(fast)
+        restored = self.run_bzip2(
+            ['--decompress', '--stdout', str(compressed)],
+            env=fast_env,
+        )
+        self.assertEqual(restored, data)
+
 
 if __name__ == '__main__':
     unittest.main()

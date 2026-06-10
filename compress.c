@@ -27,6 +27,7 @@
 */
 
 #include "bzlib_private.h"
+#include <string.h>
 #include <time.h>
 #if !defined(_WIN32)
 #include <sys/time.h>
@@ -132,7 +133,7 @@ void makeMaps_e ( EState* s )
 
 /*---------------------------------------------------*/
 static
-void generateMTFValues ( EState* s )
+void generateMTFValuesReference ( EState* s )
 {
    UChar   yy[256];
    Int32   i, j;
@@ -243,6 +244,95 @@ void generateMTFValues ( EState* s )
    mtfv[wr] = EOB; wr++; s->mtfFreq[EOB]++;
 
    s->nMTF = wr;
+}
+
+
+/*---------------------------------------------------*/
+static
+void generateMTFValuesFast ( EState* s )
+{
+   UChar   yy[256];
+   Int32   i;
+   Int32   zPend;
+   Int32   wr;
+   Int32   EOB;
+   UInt32* ptr   = s->ptr;
+   UChar* block  = s->block;
+   UInt16* mtfv  = s->mtfv;
+
+   makeMaps_e ( s );
+   EOB = s->nInUse+1;
+
+   for (i = 0; i <= EOB; i++) s->mtfFreq[i] = 0;
+
+   wr = 0;
+   zPend = 0;
+   for (i = 0; i < s->nInUse; i++) yy[i] = (UChar)i;
+
+   for (i = 0; i < s->nblock; i++) {
+      UChar ll_i;
+      UInt32 ptr_i;
+      UChar* found;
+      Int32 mtfPos;
+
+      AssertD ( wr <= i, "generateMTFValuesFast(1)" );
+      ptr_i = ptr[i];
+      if (ptr_i == 0) ptr_i = (UInt32)s->nblock;
+      ll_i = s->unseqToSeq[block[ptr_i - 1]];
+      AssertD ( ll_i < s->nInUse, "generateMTFValuesFast(2)" );
+
+      if (yy[0] == ll_i) {
+         zPend++;
+         continue;
+      }
+
+      if (zPend > 0) {
+         zPend--;
+         while (True) {
+            UInt16 runSymbol = (zPend & 1) ? BZ_RUNB : BZ_RUNA;
+            mtfv[wr++] = runSymbol;
+            s->mtfFreq[runSymbol]++;
+            if (zPend < 2) break;
+            zPend = (zPend - 2) / 2;
+         }
+         zPend = 0;
+      }
+
+      found = (UChar*)memchr ( yy + 1, ll_i,
+                               (size_t)(s->nInUse - 1) );
+      AssertD ( found != NULL, "generateMTFValuesFast(3)" );
+      mtfPos = (Int32)(found - yy);
+      memmove ( yy + 1, yy, (size_t)mtfPos );
+      yy[0] = ll_i;
+      mtfv[wr++] = (UInt16)(mtfPos + 1);
+      s->mtfFreq[mtfPos + 1]++;
+   }
+
+   if (zPend > 0) {
+      zPend--;
+      while (True) {
+         UInt16 runSymbol = (zPend & 1) ? BZ_RUNB : BZ_RUNA;
+         mtfv[wr++] = runSymbol;
+         s->mtfFreq[runSymbol]++;
+         if (zPend < 2) break;
+         zPend = (zPend - 2) / 2;
+      }
+   }
+
+   mtfv[wr++] = (UInt16)EOB;
+   s->mtfFreq[EOB]++;
+   s->nMTF = wr;
+}
+
+
+/*---------------------------------------------------*/
+static
+void generateMTFValues ( EState* s )
+{
+   if (s->fastMTFEnabled)
+      generateMTFValuesFast ( s );
+   else
+      generateMTFValuesReference ( s );
 }
 
 

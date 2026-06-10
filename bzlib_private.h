@@ -248,6 +248,7 @@ typedef
 
       /* optional internal compression profiling */
       Bool     profileEnabled;
+      Bool     fastMTFEnabled;
       Int32    profileBlocks;
       double   profileBlockSortSeconds;
       double   profileMTFSeconds;

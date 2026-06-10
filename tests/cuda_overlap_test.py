@@ -45,6 +45,17 @@ class CUDAOverlapSurfaceTest(unittest.TestCase):
         self.assertIn('BZ2_CUDA_OVERLAP', benchmark)
         self.assertIn('profile-cuda-overlap', benchmark)
 
+    def test_fast_mtf_is_runtime_opt_in_with_reference_fallback(self):
+        private_header = self.read_text('bzlib_private.h')
+        bzlib = self.read_text('bzlib.c')
+        compress = self.read_text('compress.c')
+        benchmark = self.read_text('bench/cuda_profile_compare.py')
+        self.assertIn('fastMTFEnabled', private_header)
+        self.assertIn('BZ2_FAST_MTF', bzlib)
+        self.assertIn('generateMTFValuesFast', compress)
+        self.assertIn('generateMTFValuesReference', compress)
+        self.assertIn('--compare-fast-mtf', benchmark)
+
 
 if __name__ == '__main__':
     unittest.main()

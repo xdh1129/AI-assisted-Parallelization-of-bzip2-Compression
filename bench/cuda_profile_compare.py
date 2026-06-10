@@ -113,13 +113,17 @@ def recommend_next(profile):
     )
 
 
-def measure(binary, input_path, block_size, disable_cuda, overlap, tmp_dir):
+def measure(binary, input_path, block_size, disable_cuda, overlap, fast_mtf, tmp_dir):
     env = os.environ.copy()
     env['BZ2_PROFILE'] = '1'
     if disable_cuda:
         mode = 'profile-cpu-fallback'
+    elif overlap and fast_mtf:
+        mode = 'profile-cuda-overlap-fast-mtf'
     elif overlap:
         mode = 'profile-cuda-overlap'
+    elif fast_mtf:
+        mode = 'profile-cuda-fast-mtf'
     else:
         mode = 'profile-cuda-enabled'
     if disable_cuda:
@@ -130,6 +134,10 @@ def measure(binary, input_path, block_size, disable_cuda, overlap, tmp_dir):
         env['BZ2_CUDA_OVERLAP'] = '1'
     else:
         env.pop('BZ2_CUDA_OVERLAP', None)
+    if fast_mtf:
+        env['BZ2_FAST_MTF'] = '1'
+    else:
+        env.pop('BZ2_FAST_MTF', None)
 
     compressed_path = tmp_dir / (input_path.name + '.' + mode + '.bz2')
     restored_path = tmp_dir / (input_path.name + '.' + mode + '.restored')
@@ -213,23 +221,28 @@ def main():
     parser.add_argument('--disable-cuda', action='store_true', help='Set BZ2_DISABLE_CUDA=1 and run only CPU fallback.')
     parser.add_argument('--compare-cpu', action='store_true', help='Also run CPU fallback after CUDA-enabled profiling.')
     parser.add_argument('--compare-overlap', action='store_true', help='Also run with BZ2_CUDA_OVERLAP=1.')
+    parser.add_argument('--compare-fast-mtf', action='store_true', help='Also run with BZ2_FAST_MTF=1.')
     parser.add_argument('--tmp-dir', type=Path, default=None, help='Directory for temporary compressed/restored files.')
     args = parser.parse_args()
 
-    modes = [(False, False)]
+    modes = [(False, False, False)]
     if args.compare_overlap:
-        modes.append((False, True))
+        modes.append((False, True, False))
+    if args.compare_fast_mtf:
+        modes.append((False, False, True))
+    if args.compare_overlap and args.compare_fast_mtf:
+        modes.append((False, True, True))
     if args.compare_cpu:
-        modes.append((True, False))
+        modes.append((True, False, False))
     if args.disable_cuda:
-        modes = [(True, False)]
+        modes = [(True, False, False)]
 
     with tempfile.TemporaryDirectory(dir=str(args.tmp_dir) if args.tmp_dir else None) as tmp:
         tmp_dir = Path(tmp)
-        for disable_cuda, overlap in modes:
+        for disable_cuda, overlap, fast_mtf in modes:
             print_result(measure(
                 args.bzip2, args.input, args.block_size,
-                disable_cuda, overlap, tmp_dir,
+                disable_cuda, overlap, fast_mtf, tmp_dir,
             ))
 
 

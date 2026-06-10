@@ -51,6 +51,19 @@ Bool compress_profile_env_enabled ( void )
 #endif
 }
 
+static
+Bool compress_fast_mtf_env_enabled ( void )
+{
+#ifndef BZ_NO_STDIO
+   const char* value;
+   value = getenv ( "BZ2_FAST_MTF" );
+   return (Bool)(value != NULL && value[0] != 0 &&
+                 !(value[0] == '0' && value[1] == 0));
+#else
+   return False;
+#endif
+}
+
 #if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
 static
 Bool compress_overlap_env_enabled ( void )
@@ -80,6 +93,7 @@ static
 void init_compress_profile ( EState* s )
 {
    s->profileEnabled = compress_profile_env_enabled();
+   s->fastMTFEnabled = compress_fast_mtf_env_enabled();
    s->profileBlocks = 0;
    s->profileBlockSortSeconds = 0.0;
    s->profileMTFSeconds = 0.0;
@@ -112,6 +126,13 @@ void print_compress_profile ( EState* s )
              s->profileWorkerSortWaitSeconds,
              s->profileOverlappedSortSeconds,
              s->profileEncodeSeconds );
+   fprintf ( stderr, "bzip2-profile: options cuda_overlap=%d fast_mtf=%d\n",
+#if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
+             (Int32)s->overlapEnabled,
+#else
+             0,
+#endif
+             (Int32)s->fastMTFEnabled );
 }
 #endif
 

@@ -65,6 +65,7 @@ class CompressionProfileTest(unittest.TestCase):
         self.assertIn('mtf=', profile_stderr)
         self.assertIn('huffman_bitstream=', profile_stderr)
         self.assertIn('compress_block_total=', profile_stderr)
+        self.assertIn('fast_mtf=', profile_stderr)
 
         restored, _ = self.run_bzip2(
             ['--decompress', '--stdout', str(compressed)],
