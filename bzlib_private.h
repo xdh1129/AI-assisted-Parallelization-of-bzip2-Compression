@@ -193,6 +193,19 @@ extern UInt32 BZ2_crc32Table[256];
 
 typedef
    struct {
+      UInt32*  arr1;
+      UInt32*  arr2;
+      UInt32*  ftab;
+      Int32    nblock;
+      UInt32   blockCRC;
+      Int32    blockNo;
+      Int32    origPtr;
+      Bool     inUse[256];
+   }
+   BZ2BlockSlot;
+
+typedef
+   struct {
       /* pointer back to the struct bz_stream */
       bz_stream* strm;
 
@@ -222,6 +235,15 @@ typedef
 #if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
       /* reusable CUDA blocksort buffers, owned by this compression state */
       void*    cudaBlockSortWorkspace;
+      Bool     overlapEnabled;
+      Bool     overlapFailed;
+      BZ2BlockSlot overlapSlots[2];
+      Int32    overlapFillSlot;
+      Int32    overlapPendingSlot;
+      Bool     overlapPendingAsync;
+      Int32    overlapOutputSlot;
+      Int32    overlapNextBlockNo;
+      void*    cudaOverlapWorker;
 #endif
 
       /* optional internal compression profiling */
@@ -231,6 +253,10 @@ typedef
       double   profileMTFSeconds;
       double   profileHuffmanBitstreamSeconds;
       double   profileCompressBlockSeconds;
+      double   profileWorkerSortWaitSeconds;
+      double   profileOverlappedSortSeconds;
+      double   profileEncodeSeconds;
+      Int32    profilePipelineBlocks;
 
       /* run-length-encoding of the input */
       UInt32   state_in_ch;
@@ -285,6 +311,12 @@ BZ2_blockSort ( EState* );
 
 extern void
 BZ2_compressBlock ( EState*, Bool );
+
+extern void
+BZ2_compressBlockPrepare ( EState* );
+
+extern void
+BZ2_compressBlockEncode ( EState*, Bool );
 
 extern void
 BZ2_bsInitWrite ( EState* );

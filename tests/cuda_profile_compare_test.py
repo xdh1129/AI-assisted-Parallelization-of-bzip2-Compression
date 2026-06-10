@@ -34,6 +34,8 @@ class CUDAProfileCompareTest(unittest.TestCase):
             'bzip2-profile: blocks=3\n'
             'bzip2-profile: blocksort=1.250000s mtf=0.500000s '
             'huffman_bitstream=0.750000s compress_block_total=2.700000s\n'
+            'bzip2-profile: pipeline_blocks=2 worker_sort_wait=0.100000s '
+            'overlapped_sort=1.200000s encode=1.100000s\n'
         )
 
         profile = self.profile_module.parse_profile(stderr)
@@ -43,6 +45,8 @@ class CUDAProfileCompareTest(unittest.TestCase):
         self.assertAlmostEqual(profile['mtf'], 0.5)
         self.assertAlmostEqual(profile['huffman_bitstream'], 0.75)
         self.assertAlmostEqual(profile['compress_block_total'], 2.7)
+        self.assertEqual(profile['pipeline_blocks'], 2)
+        self.assertAlmostEqual(profile['worker_sort_wait'], 0.1)
 
     def test_profile_helper_reports_phase_percentages(self):
         script = self.source / 'bench' / 'cuda_profile_compare.py'

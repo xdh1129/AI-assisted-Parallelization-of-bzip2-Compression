@@ -72,6 +72,10 @@ add_test(NAME cuda_roundtrip COMMAND ${PythonTest_COMMAND};cuda_roundtrip_test.p
          WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 set_property(TEST cuda_roundtrip PROPERTY ENVIRONMENT ${ENVIRONMENT})
 
+add_test(NAME cuda_overlap COMMAND ${PythonTest_COMMAND};cuda_overlap_test.py
+         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+set_property(TEST cuda_overlap PROPERTY ENVIRONMENT ${ENVIRONMENT})
+
 add_test(NAME cuda_pipeline COMMAND ${PythonTest_COMMAND};cuda_pipeline_test.py
          WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 set_property(TEST cuda_pipeline PROPERTY ENVIRONMENT ${ENVIRONMENT})

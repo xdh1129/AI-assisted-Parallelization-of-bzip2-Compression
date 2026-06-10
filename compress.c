@@ -613,7 +613,14 @@ void sendMTFValues ( EState* s )
 
 
 /*---------------------------------------------------*/
-void BZ2_compressBlock ( EState* s, Bool is_last_block )
+void BZ2_compressBlockPrepare ( EState* s )
+{
+   if (s->nblock > 0) BZ_FINALISE_CRC ( s->blockCRC );
+}
+
+
+/*---------------------------------------------------*/
+void BZ2_compressBlockEncode ( EState* s, Bool is_last_block )
 {
    Bool profileBlock;
    double totalStart;
@@ -626,8 +633,6 @@ void BZ2_compressBlock ( EState* s, Bool is_last_block )
    if (profileBlock) totalStart = profile_now();
 
    if (s->nblock > 0) {
-
-      BZ_FINALISE_CRC ( s->blockCRC );
       s->combinedCRC = (s->combinedCRC << 1) | (s->combinedCRC >> 31);
       s->combinedCRC ^= s->blockCRC;
       if (s->blockNo > 1) s->numZ = 0;
@@ -637,10 +642,6 @@ void BZ2_compressBlock ( EState* s, Bool is_last_block )
                    "combined CRC = 0x%08x, size = %d\n",
                    s->blockNo, s->blockCRC, s->combinedCRC, s->nblock );
 
-      if (profileBlock) phaseStart = profile_now();
-      BZ2_blockSort ( s );
-      if (profileBlock)
-         s->profileBlockSortSeconds += profile_now() - phaseStart;
    }
 
    s->zbits = (UChar*) (&((UChar*)s->arr2)[s->nblock]);
@@ -707,6 +708,27 @@ void BZ2_compressBlock ( EState* s, Bool is_last_block )
       s->profileBlocks++;
       s->profileCompressBlockSeconds += profile_now() - totalStart;
    }
+}
+
+
+/*---------------------------------------------------*/
+void BZ2_compressBlock ( EState* s, Bool is_last_block )
+{
+   Bool profileBlock = (Bool)(s->profileEnabled && s->nblock > 0);
+   double phaseStart = 0.0;
+   double sortSeconds = 0.0;
+
+   BZ2_compressBlockPrepare ( s );
+   if (s->nblock > 0) {
+      if (profileBlock) phaseStart = profile_now();
+      BZ2_blockSort ( s );
+      if (profileBlock) {
+         sortSeconds = profile_now() - phaseStart;
+         s->profileBlockSortSeconds += sortSeconds;
+      }
+   }
+   BZ2_compressBlockEncode ( s, is_last_block );
+   if (profileBlock) s->profileCompressBlockSeconds += sortSeconds;
 }
 
 

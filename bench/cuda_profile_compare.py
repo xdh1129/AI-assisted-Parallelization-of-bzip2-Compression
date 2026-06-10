@@ -21,6 +21,13 @@ PROFILE_PHASES_RE = re.compile(
     r'compress_block_total=([0-9.]+)s\s*$',
     re.MULTILINE,
 )
+PROFILE_OVERLAP_RE = re.compile(
+    r'^bzip2-profile:\s+pipeline_blocks=(\d+)\s+'
+    r'worker_sort_wait=([0-9.]+)s\s+'
+    r'overlapped_sort=([0-9.]+)s\s+'
+    r'encode=([0-9.]+)s\s*$',
+    re.MULTILINE,
+)
 
 
 def parse_profile(stderr_text):
@@ -31,13 +38,22 @@ def parse_profile(stderr_text):
             'BZ2_PROFILE output was not found. Rebuild after pulling the profiling commit.'
         )
 
-    return {
+    profile = {
         'blocks': int(blocks_match.group(1)),
         'blocksort': float(phases_match.group(1)),
         'mtf': float(phases_match.group(2)),
         'huffman_bitstream': float(phases_match.group(3)),
         'compress_block_total': float(phases_match.group(4)),
     }
+    overlap_match = PROFILE_OVERLAP_RE.search(stderr_text)
+    if overlap_match is not None:
+        profile.update({
+            'pipeline_blocks': int(overlap_match.group(1)),
+            'worker_sort_wait': float(overlap_match.group(2)),
+            'overlapped_sort': float(overlap_match.group(3)),
+            'encode': float(overlap_match.group(4)),
+        })
+    return profile
 
 
 def run_to_file(command, output_path, env=None):
@@ -97,14 +113,23 @@ def recommend_next(profile):
     )
 
 
-def measure(binary, input_path, block_size, disable_cuda, tmp_dir):
+def measure(binary, input_path, block_size, disable_cuda, overlap, tmp_dir):
     env = os.environ.copy()
     env['BZ2_PROFILE'] = '1'
-    mode = 'profile-cpu-fallback' if disable_cuda else 'profile-cuda-enabled'
+    if disable_cuda:
+        mode = 'profile-cpu-fallback'
+    elif overlap:
+        mode = 'profile-cuda-overlap'
+    else:
+        mode = 'profile-cuda-enabled'
     if disable_cuda:
         env['BZ2_DISABLE_CUDA'] = '1'
     else:
         env.pop('BZ2_DISABLE_CUDA', None)
+    if overlap:
+        env['BZ2_CUDA_OVERLAP'] = '1'
+    else:
+        env.pop('BZ2_CUDA_OVERLAP', None)
 
     compressed_path = tmp_dir / (input_path.name + '.' + mode + '.bz2')
     restored_path = tmp_dir / (input_path.name + '.' + mode + '.restored')
@@ -171,6 +196,13 @@ def print_result(result):
         )
     )
     print('next-step: {}'.format(recommend_next(profile)))
+    if 'pipeline_blocks' in profile:
+        print(
+            'overlap-detail: pipeline_blocks={pipeline_blocks} '
+            'worker_sort_wait={worker_sort_wait:.6f}s '
+            'overlapped_sort={overlapped_sort:.6f}s '
+            'encode={encode:.6f}s'.format(**profile)
+        )
 
 
 def main():
@@ -180,19 +212,25 @@ def main():
     parser.add_argument('--block-size', default='-9', choices=['-1', '-2', '-3', '-4', '-5', '-6', '-7', '-8', '-9'])
     parser.add_argument('--disable-cuda', action='store_true', help='Set BZ2_DISABLE_CUDA=1 and run only CPU fallback.')
     parser.add_argument('--compare-cpu', action='store_true', help='Also run CPU fallback after CUDA-enabled profiling.')
+    parser.add_argument('--compare-overlap', action='store_true', help='Also run with BZ2_CUDA_OVERLAP=1.')
     parser.add_argument('--tmp-dir', type=Path, default=None, help='Directory for temporary compressed/restored files.')
     args = parser.parse_args()
 
-    modes = [False]
+    modes = [(False, False)]
+    if args.compare_overlap:
+        modes.append((False, True))
     if args.compare_cpu:
-        modes.append(True)
+        modes.append((True, False))
     if args.disable_cuda:
-        modes = [True]
+        modes = [(True, False)]
 
     with tempfile.TemporaryDirectory(dir=str(args.tmp_dir) if args.tmp_dir else None) as tmp:
         tmp_dir = Path(tmp)
-        for disable_cuda in modes:
-            print_result(measure(args.bzip2, args.input, args.block_size, disable_cuda, tmp_dir))
+        for disable_cuda, overlap in modes:
+            print_result(measure(
+                args.bzip2, args.input, args.block_size,
+                disable_cuda, overlap, tmp_dir,
+            ))
 
 
 if __name__ == '__main__':

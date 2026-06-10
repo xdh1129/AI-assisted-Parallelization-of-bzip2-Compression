@@ -79,6 +79,23 @@ class CUDARoundtripTest(unittest.TestCase):
             self.assert_roundtrip(name, data)
             self.assert_roundtrip(name + '.fallback', data, {'BZ2_DISABLE_CUDA': '1'})
 
+    def test_overlap_option_roundtrips_with_cuda_and_cpu_fallback(self):
+        data = (
+            bytes(range(256)) * 8192 +
+            (b'internal-cuda-overlap-' * 65536) +
+            (b'Z' * (1024 * 1024))
+        )
+        self.assert_roundtrip(
+            'overlap.bin',
+            data,
+            {'BZ2_CUDA_OVERLAP': '1'},
+        )
+        self.assert_roundtrip(
+            'overlap-fallback.bin',
+            data,
+            {'BZ2_CUDA_OVERLAP': '1', 'BZ2_DISABLE_CUDA': '1'},
+        )
+
 
 if __name__ == '__main__':
     unittest.main()

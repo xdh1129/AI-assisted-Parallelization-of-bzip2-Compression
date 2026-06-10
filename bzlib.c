@@ -32,6 +32,10 @@
 #include "bz_version.h"
 #if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
 #include "cuda/blocksort_cuda.h"
+#include "cuda/blocksort_overlap.h"
+#if !defined(_WIN32)
+#include <sys/time.h>
+#endif
 #endif
 
 static
@@ -47,6 +51,31 @@ Bool compress_profile_env_enabled ( void )
 #endif
 }
 
+#if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
+static
+Bool compress_overlap_env_enabled ( void )
+{
+#ifndef BZ_NO_STDIO
+   const char* value = getenv ( "BZ2_CUDA_OVERLAP" );
+   return (Bool)(value != NULL && value[0] != 0 &&
+                 !(value[0] == '0' && value[1] == 0));
+#else
+   return False;
+#endif
+}
+
+static
+double overlap_now ( void )
+{
+#if !defined(_WIN32)
+   struct timeval tv;
+   if (gettimeofday ( &tv, NULL ) == 0)
+      return (double)tv.tv_sec + ((double)tv.tv_usec / 1000000.0);
+#endif
+   return 0.0;
+}
+#endif
+
 static
 void init_compress_profile ( EState* s )
 {
@@ -56,6 +85,10 @@ void init_compress_profile ( EState* s )
    s->profileMTFSeconds = 0.0;
    s->profileHuffmanBitstreamSeconds = 0.0;
    s->profileCompressBlockSeconds = 0.0;
+   s->profileWorkerSortWaitSeconds = 0.0;
+   s->profileOverlappedSortSeconds = 0.0;
+   s->profileEncodeSeconds = 0.0;
+   s->profilePipelineBlocks = 0;
 }
 
 #ifndef BZ_NO_STDIO
@@ -67,12 +100,18 @@ void print_compress_profile ( EState* s )
    fprintf ( stderr,
              "bzip2-profile: blocks=%d\n"
              "bzip2-profile: blocksort=%.6fs mtf=%.6fs "
-             "huffman_bitstream=%.6fs compress_block_total=%.6fs\n",
+             "huffman_bitstream=%.6fs compress_block_total=%.6fs\n"
+             "bzip2-profile: pipeline_blocks=%d worker_sort_wait=%.6fs "
+             "overlapped_sort=%.6fs encode=%.6fs\n",
              s->profileBlocks,
              s->profileBlockSortSeconds,
              s->profileMTFSeconds,
              s->profileHuffmanBitstreamSeconds,
-             s->profileCompressBlockSeconds );
+             s->profileCompressBlockSeconds,
+             s->profilePipelineBlocks,
+             s->profileWorkerSortWaitSeconds,
+             s->profileOverlappedSortSeconds,
+             s->profileEncodeSeconds );
 }
 #endif
 
@@ -190,6 +229,122 @@ Bool isempty_RL ( EState* s )
       return True;
 }
 
+#if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
+static
+void overlap_select_slot ( EState* s, Int32 slotNo )
+{
+   BZ2BlockSlot* slot = &s->overlapSlots[slotNo];
+   s->arr1 = slot->arr1;
+   s->arr2 = slot->arr2;
+   s->ftab = slot->ftab;
+   s->ptr = slot->arr1;
+   s->block = (UChar*)slot->arr2;
+   s->mtfv = (UInt16*)slot->arr1;
+}
+
+static
+void overlap_save_slot ( EState* s, Int32 slotNo )
+{
+   Int32 i;
+   BZ2BlockSlot* slot = &s->overlapSlots[slotNo];
+   slot->nblock = s->nblock;
+   slot->blockCRC = s->blockCRC;
+   slot->blockNo = s->blockNo;
+   slot->origPtr = s->origPtr;
+   for (i = 0; i < 256; i++) slot->inUse[i] = s->inUse[i];
+}
+
+static
+void overlap_load_slot ( EState* s, Int32 slotNo )
+{
+   Int32 i;
+   BZ2BlockSlot* slot = &s->overlapSlots[slotNo];
+   overlap_select_slot ( s, slotNo );
+   s->nblock = slot->nblock;
+   s->blockCRC = slot->blockCRC;
+   s->blockNo = slot->blockNo;
+   s->origPtr = slot->origPtr;
+   for (i = 0; i < 256; i++) s->inUse[i] = slot->inUse[i];
+}
+
+static
+void overlap_prepare_slot ( EState* s, Int32 slotNo )
+{
+   Int32 i;
+   overlap_select_slot ( s, slotNo );
+   s->nblock = 0;
+   s->numZ = 0;
+   s->state_out_pos = 0;
+   BZ_INITIALISE_CRC ( s->blockCRC );
+   for (i = 0; i < 256; i++) s->inUse[i] = False;
+   s->blockNo = s->overlapNextBlockNo++;
+   s->overlapFillSlot = slotNo;
+   overlap_save_slot ( s, slotNo );
+}
+
+static
+Bool overlap_finish_sort ( EState* s, Int32 slotNo )
+{
+   Bool success;
+   Int32 origPtr = -1;
+   double sortSeconds = 0.0;
+   double waitStart = overlap_now();
+
+   success = BZ2_cudaOverlapWait ( s->cudaOverlapWorker,
+                                   &origPtr, &sortSeconds );
+   s->profileWorkerSortWaitSeconds += overlap_now() - waitStart;
+   s->profileOverlappedSortSeconds += sortSeconds;
+   if (s->profileEnabled) {
+      s->profileBlockSortSeconds += sortSeconds;
+      s->profileCompressBlockSeconds += sortSeconds;
+   }
+   if (success) s->overlapSlots[slotNo].origPtr = origPtr;
+   return success;
+}
+
+static
+void overlap_encode_slot ( EState* s, Int32 slotNo,
+                            Bool sorted, Bool isLast )
+{
+   double encodeStart;
+   double sortStart;
+   double fallbackSortSeconds;
+   overlap_load_slot ( s, slotNo );
+   if (!sorted) {
+      s->overlapFailed = True;
+      sortStart = overlap_now();
+      BZ2_blockSort ( s );
+      if (s->profileEnabled) {
+         fallbackSortSeconds = overlap_now() - sortStart;
+         s->profileBlockSortSeconds += fallbackSortSeconds;
+         s->profileCompressBlockSeconds += fallbackSortSeconds;
+      }
+   }
+   encodeStart = overlap_now();
+   BZ2_compressBlockEncode ( s, isLast );
+   if (s->verbosity >= 3)
+      VPrintf3 ( "      overlap encoded block %d: %d bytes, last=%d\n",
+                 s->blockNo, s->numZ, (Int32)isLast );
+   s->profileEncodeSeconds += overlap_now() - encodeStart;
+   s->profilePipelineBlocks++;
+   s->overlapOutputSlot = slotNo;
+   s->state_out_pos = 0;
+   s->state = BZ_S_OUTPUT;
+}
+
+static
+void overlap_encode_pending ( EState* s, Bool isLast )
+{
+   Int32 slotNo = s->overlapPendingSlot;
+   Bool sorted = False;
+   if (s->overlapPendingAsync)
+      sorted = overlap_finish_sort ( s, slotNo );
+   s->overlapPendingSlot = -1;
+   s->overlapPendingAsync = False;
+   overlap_encode_slot ( s, slotNo, sorted, isLast );
+}
+#endif
+
 
 /*---------------------------------------------------*/
 int BZ_API(BZ2_bzCompressInit)
@@ -241,9 +396,50 @@ int BZ_API(BZ2_bzCompressInit)
    s->nblockMAX         = 100000 * blockSize100k - 19;
    s->verbosity         = verbosity;
    s->workFactor        = workFactor;
+   s->origPtr           = -1;
    init_compress_profile ( s );
 #if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
    s->cudaBlockSortWorkspace = NULL;
+   s->overlapEnabled = False;
+   s->overlapFailed = False;
+   s->overlapFillSlot = 0;
+   s->overlapPendingSlot = -1;
+   s->overlapPendingAsync = False;
+   s->overlapOutputSlot = -1;
+   s->overlapNextBlockNo = 2;
+   s->cudaOverlapWorker = NULL;
+   s->overlapSlots[0].arr1 = s->arr1;
+   s->overlapSlots[0].arr2 = s->arr2;
+   s->overlapSlots[0].ftab = s->ftab;
+   s->overlapSlots[1].arr1 = NULL;
+   s->overlapSlots[1].arr2 = NULL;
+   s->overlapSlots[1].ftab = NULL;
+
+   if (compress_overlap_env_enabled()) {
+      s->overlapSlots[1].arr1 = BZALLOC( n * sizeof(UInt32) );
+      s->overlapSlots[1].arr2 =
+         BZALLOC( (n+BZ_N_OVERSHOOT) * sizeof(UInt32) );
+      s->overlapSlots[1].ftab = BZALLOC( 65537 * sizeof(UInt32) );
+      s->cudaOverlapWorker = BZ2_cudaOverlapCreate();
+      if (s->overlapSlots[1].arr1 != NULL &&
+          s->overlapSlots[1].arr2 != NULL &&
+          s->overlapSlots[1].ftab != NULL &&
+          s->cudaOverlapWorker != NULL) {
+         s->overlapEnabled = True;
+      } else {
+         if (s->overlapSlots[1].arr1 != NULL)
+            BZFREE(s->overlapSlots[1].arr1);
+         if (s->overlapSlots[1].arr2 != NULL)
+            BZFREE(s->overlapSlots[1].arr2);
+         if (s->overlapSlots[1].ftab != NULL)
+            BZFREE(s->overlapSlots[1].ftab);
+         BZ2_cudaOverlapDestroy ( s->cudaOverlapWorker );
+         s->overlapSlots[1].arr1 = NULL;
+         s->overlapSlots[1].arr2 = NULL;
+         s->overlapSlots[1].ftab = NULL;
+         s->cudaOverlapWorker = NULL;
+      }
+   }
 #endif
 
    s->block             = (UChar*)s->arr2;
@@ -422,7 +618,50 @@ Bool handle_compress ( bz_stream* strm )
          if (s->state_out_pos < s->numZ) break;
          if (s->mode == BZ_M_FINISHING &&
              s->avail_in_expect == 0 &&
-             isempty_RL(s)) break;
+             isempty_RL(s)
+#if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
+             && (!s->overlapEnabled ||
+                 (s->overlapPendingSlot < 0 &&
+                  s->overlapFillSlot < 0))
+#endif
+            ) break;
+#if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
+         if (s->overlapEnabled && s->overlapOutputSlot >= 0) {
+            Int32 freeSlot = s->overlapOutputSlot;
+            s->overlapOutputSlot = -1;
+            if (s->overlapFillSlot >= 0) {
+               overlap_load_slot ( s, s->overlapFillSlot );
+               s->numZ = 0;
+               s->state_out_pos = 0;
+               s->state = BZ_S_INPUT;
+               continue;
+            }
+            if (s->overlapPendingSlot >= 0 &&
+                (s->overlapFailed ||
+                 (s->mode != BZ_M_RUNNING &&
+                  s->avail_in_expect == 0 && isempty_RL(s)))) {
+               overlap_encode_pending (
+                  s, (Bool)(s->mode == BZ_M_FINISHING &&
+                            s->avail_in_expect == 0 && isempty_RL(s)) );
+               continue;
+            }
+            if (s->overlapFailed && s->overlapPendingSlot < 0) {
+               overlap_select_slot ( s, freeSlot );
+               s->overlapEnabled = False;
+               s->overlapFillSlot = -1;
+               prepare_new_block ( s );
+               s->state = BZ_S_INPUT;
+               if (s->mode == BZ_M_FLUSHING &&
+                   s->avail_in_expect == 0 && isempty_RL(s)) break;
+               continue;
+            }
+            overlap_prepare_slot ( s, freeSlot );
+            s->state = BZ_S_INPUT;
+            if (s->mode == BZ_M_FLUSHING &&
+                s->avail_in_expect == 0 && isempty_RL(s)) break;
+            continue;
+         }
+#endif
          prepare_new_block ( s );
          s->state = BZ_S_INPUT;
          if (s->mode == BZ_M_FLUSHING &&
@@ -434,11 +673,82 @@ Bool handle_compress ( bz_stream* strm )
          progress_in |= copy_input_until_stop ( s );
          if (s->mode != BZ_M_RUNNING && s->avail_in_expect == 0) {
             flush_RL ( s );
+#if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
+            if (s->overlapEnabled && s->overlapPendingSlot >= 0) {
+               Bool pendingIsLast;
+               overlap_save_slot ( s, s->overlapFillSlot );
+               pendingIsLast = (Bool)(s->mode == BZ_M_FINISHING &&
+                                      s->nblock == 0);
+               if (s->nblock == 0) s->overlapFillSlot = -1;
+               overlap_encode_pending ( s, pendingIsLast );
+               continue;
+            }
+            if (s->overlapEnabled && s->overlapFillSlot >= 0) {
+               Int32 finalSlot = s->overlapFillSlot;
+               BZ2_compressBlock (
+                  s, (Bool)(s->mode == BZ_M_FINISHING) );
+               s->overlapOutputSlot = finalSlot;
+               s->overlapFillSlot = -1;
+               s->state = BZ_S_OUTPUT;
+               continue;
+            }
+#endif
             BZ2_compressBlock ( s, (Bool)(s->mode == BZ_M_FINISHING) );
             s->state = BZ_S_OUTPUT;
          }
          else
          if (s->nblock >= s->nblockMAX) {
+#if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
+            if (s->overlapEnabled && !s->overlapFailed) {
+               Int32 currentSlot = s->overlapFillSlot;
+               Int32 otherSlot = 1 - currentSlot;
+               BZ2_compressBlockPrepare ( s );
+               overlap_save_slot ( s, currentSlot );
+
+               if (s->overlapPendingSlot < 0) {
+                  if (BZ2_cudaOverlapLaunch (
+                         s->cudaOverlapWorker,
+                         s->overlapSlots[currentSlot].arr1,
+                         (UChar*)s->overlapSlots[currentSlot].arr2,
+                         s->overlapSlots[currentSlot].nblock,
+                         s->verbosity )) {
+                     s->overlapPendingSlot = currentSlot;
+                     s->overlapPendingAsync = True;
+                     s->overlapFillSlot = -1;
+                     overlap_prepare_slot ( s, otherSlot );
+                     continue;
+                  }
+                  s->overlapFailed = True;
+                  overlap_load_slot ( s, currentSlot );
+                  BZ2_blockSort ( s );
+                  overlap_save_slot ( s, currentSlot );
+                  overlap_encode_slot ( s, currentSlot, True, False );
+                  s->overlapFillSlot = -1;
+                  continue;
+               } else {
+                  Int32 oldSlot = s->overlapPendingSlot;
+                  Bool oldSorted = False;
+                  Bool launched;
+                  if (s->overlapPendingAsync)
+                     oldSorted = overlap_finish_sort ( s, oldSlot );
+                  s->overlapPendingSlot = -1;
+                  s->overlapPendingAsync = False;
+
+                  launched = BZ2_cudaOverlapLaunch (
+                     s->cudaOverlapWorker,
+                     s->overlapSlots[currentSlot].arr1,
+                     (UChar*)s->overlapSlots[currentSlot].arr2,
+                     s->overlapSlots[currentSlot].nblock,
+                     s->verbosity );
+                  s->overlapPendingSlot = currentSlot;
+                  s->overlapPendingAsync = launched;
+                  if (!launched) s->overlapFailed = True;
+                  s->overlapFillSlot = -1;
+                  overlap_encode_slot ( s, oldSlot, oldSorted, False );
+                  continue;
+               }
+            }
+#endif
             BZ2_compressBlock ( s, False );
             s->state = BZ_S_OUTPUT;
          }
@@ -528,7 +838,17 @@ int BZ_API(BZ2_bzCompressEnd)  ( bz_stream *strm )
    print_compress_profile ( s );
 #endif
 #if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
+   BZ2_cudaOverlapDestroy ( s->cudaOverlapWorker );
    BZ2_cudaBlockSortCleanup ( s->cudaBlockSortWorkspace );
+   if (s->overlapSlots[0].arr1 != NULL) BZFREE(s->overlapSlots[0].arr1);
+   if (s->overlapSlots[0].arr2 != NULL) BZFREE(s->overlapSlots[0].arr2);
+   if (s->overlapSlots[0].ftab != NULL) BZFREE(s->overlapSlots[0].ftab);
+   if (s->overlapSlots[1].arr1 != NULL) BZFREE(s->overlapSlots[1].arr1);
+   if (s->overlapSlots[1].arr2 != NULL) BZFREE(s->overlapSlots[1].arr2);
+   if (s->overlapSlots[1].ftab != NULL) BZFREE(s->overlapSlots[1].ftab);
+   s->arr1 = NULL;
+   s->arr2 = NULL;
+   s->ftab = NULL;
 #endif
    if (s->arr1 != NULL) BZFREE(s->arr1);
    if (s->arr2 != NULL) BZFREE(s->arr2);

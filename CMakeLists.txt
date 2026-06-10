@@ -39,6 +39,7 @@ option(ENABLE_CUDA "Build optional CUDA block sorting acceleration" OFF)
 if(ENABLE_CUDA)
     enable_language(CUDA)
     find_package(CUDAToolkit REQUIRED)
+    find_package(Threads REQUIRED)
     set(CMAKE_CUDA_STANDARD 14)
     set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 endif()
@@ -289,14 +290,15 @@ set(BZ2_SOURCES
 
 if(ENABLE_CUDA)
     list(APPEND BZ2_SOURCES
-        cuda/blocksort_cuda.cu)
+        cuda/blocksort_cuda.cu
+        cuda/blocksort_overlap.c)
 endif()
 
 function(configure_bz2_cuda target_name)
     if(ENABLE_CUDA)
         target_compile_definitions(${target_name} PRIVATE BZ2_ENABLE_CUDA=1)
         target_include_directories(${target_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-        target_link_libraries(${target_name} PRIVATE CUDA::cudart)
+        target_link_libraries(${target_name} PRIVATE CUDA::cudart Threads::Threads)
         set_target_properties(${target_name} PROPERTIES
             CUDA_STANDARD 14
             CUDA_STANDARD_REQUIRED ON)
