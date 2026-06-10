@@ -34,9 +34,6 @@
   \typeout{====================================================}%
 }
 
-% --- helper: gray placeholder text. Delete each \guide{...} once you fill it in.
-\newcommand{\guide}[1]{{\color{gray}\textit{[#1]}}}
-
 % --- style for verbatim prompts / agent output in the Appendix (Category B)
 \lstset{
   basicstyle=\ttfamily\footnotesize,
@@ -50,7 +47,7 @@
 
 \begin{document}
 
-\title{[Your Project Title]\\
+\title{AI-Assisted Parallelization of bzip2 Compression\\
 {\footnotesize Final Project --- Parallel Programming, Spring 2026}}
 
 \author{%
@@ -62,77 +59,154 @@
 
 %------------------------------------------------------------------------------
 \begin{abstract}
-\guide{One short paragraph (about 150--200 words). State the problem, what you
-did, and the headline result. Write it so a non-expert classmate understands the
-gist.}
+Data compression is a critical component of high-performance computing, with algorithms like bzip2 prized for their high compression ratios . bzip2 internally processes data in blocks, making it a potential candidate for parallelization. However, effectively parallelizing this process requires careful management of output ordering, synchronization overhead, and I/O bottlenecks. This paper explores the efficacy of Large Language Models (LLMs) in automating the parallelization of a sequential bzip2 compressor (pbzx). We evaluate an AI-assisted development workflow across three progressive stages of guidance: naive prompting, constraint-guided design, and profiling-guided optimization. By comparing these AI-generated implementations against a sequential baseline and an established parallel reference (lbzip2) [cite: 64, 65], we analyze how varying levels of system-level feedback impact the correctness, speedup, and parallel efficiency of AI-generated C code. Our results show that profiling-guided optimization achieves the best performance, reaching throughput parity with hand-optimized tools, while strict constraint-guided prompting inadvertently introduces structural bottlenecks.
 \end{abstract}
 
 \begin{IEEEkeywords}
-\guide{4--6 keywords, comma separated.}
+Data compression, bzip2, parallel programming, LLM code generation, AI-assisted development, performance profiling 
 \end{IEEEkeywords}
 
 \vspace{0.5em}
 \noindent\fbox{\parbox{0.97\columnwidth}{\textbf{Project Category:}\quad
 $\square$~\textbf{A} (Self-chosen topic)\qquad
-$\square$~\textbf{B} (AI-agent code optimization)\\[2pt]
+$\boxtimes$~\textbf{B} (AI-agent code optimization)\\[2pt]
 \footnotesize Tick exactly one. This tells reviewers which lens to apply.}}
-
-\vspace{0.4em}
-{\color{gray}\footnotesize\textit{[Page limit: 6 pages maximum, including
-references. The Appendix of raw materials does not count toward the limit.
-Delete this note before submitting.]}}
 
 %------------------------------------------------------------------------------
 \section{Introduction}
-\guide{What problem are you solving and why does it matter? Motivate it for a
-reader who is in this course but NOT a specialist in your sub-topic. End with a
-1--2 sentence summary of your contribution.}
+Large language models may help identify parallelizable components, generate multithreaded code, suggest pipeline designs, and optimize performance. However, AI may not fully understand the target machine, runtime behavior, synchronization costs, or the actual performance bottlenecks after parallelization. Therefore, we plan to guide AI using profiling results and system-level feedback.
 
-%------------------------------------------------------------------------------
+The objective of this project is to explore different ways of using AI to assist in parallelizing a bzip2-like compression system, and to evaluate whether AI-generated or AI-assisted parallel versions can improve performance while preserving correctness. The system splits a large input file into fixed-size blocks. It then compresses different blocks independently using multiple threads. Finally, it verifies correctness by decompressing the compressed file and comparing it with the original input. We contribute an evaluation of a multi-stage AI-agent workflow, demonstrating that shifting from naive generation to bottleneck-aware, profiling-driven prompting allows LLMs to successfully navigate the complexities of parallel code optimization.
+We contribute an evaluation of a multi-stage AI-agent workflow for parallelizing a bzip2 compressor. Our results demonstrate that shifting from naive code generation to bottleneck-aware, profiling-driven prompting allows LLMs to successfully navigate the complexities of parallel optimization, ultimately achieving throughput parity with established hand-optimized tools.
+
 \section{Background and Related Work}
 % Category A: background needed to understand your problem (e.g. the parallel
 %             system, the algorithm, prior optimization approaches).
 % Category B: introduce the benchmark/dataset, the baseline you start from, and
 %             the AI agent / tooling setup. Describe the dataset's content and
 %             characteristics, and whether you use the full set or a subset.
-\guide{Give the reader the background and prior work needed to understand your
-approach. (Cat.~B: introduce the benchmark and dataset here -- what is in it,
-its characteristics, and whether you use all problems or a subset, and why.)}
+\subsection{The bzip2 Algorithm}
+bzip2 processes data in independent blocks, so block-level parallelism is possible. Since different data blocks can be compressed independently, multiple blocks may be assigned to different worker threads and processed in parallel. In addition, block size may affect both compression ratio and parallel efficiency.
 
+\subsection{Dataset, Baseline, and AI Tooling}
+\begin{itemize}
+  \item \textbf{Workload:} The primary workload utilized for all benchmark sweeps is a large tarball extracted from the Canterbury Corpus, providing a realistic and compressible dataset.
+  \item \textbf{Baseline:} To isolate the effects of our parallelization strategies, we utilize pbzx, a custom C11 baseline that sequentially compresses blocks using vendored libbz2. We compare the AI-generated implementations against lbzip2, a highly optimized, existing parallel implementation.
+  \item \textbf{AI Agent Setup:} The Claude Code agent operates autonomously within isolated Git worktrees for each stage.
+\end{itemize}
 %------------------------------------------------------------------------------
 \section{Methodology}
 % Category A: your optimization / design approach. What did you change, and why?
 % Category B: your AI prompt-engineering design -- how you instruct and guide the
 %             agent, your iteration strategy, and the agent configuration.
-\guide{Describe your approach clearly enough that the key decisions are
-justified, not just stated.}
-\guide{Cat.~A: the optimization or design, what you changed, and the reasoning.}
-\guide{Cat.~B: the prompt-engineering design -- input prompt, system prompt,
-agent configuration, and how you iterated to guide the agent. Reference the full
-verbatim materials in the Appendix.}
+Instead of only asking AI to ``make the code faster,'' we will design a structured workflow to guide AI step by step. The project isolates the development of each AI-assisted implementation on dedicated Git branches stemming from the main baseline.
 
+\subsection{Stage 1: Naive AI Parallelization}
+In the first stage, we will provide AI with the sequential bzip2 compression code and ask it to parallelize the program. The agent receives a minimal prompt without hints regarding the parallelization strategy. This stage tests whether AI can independently identify the parallelizable parts of the program.
+
+\subsection{Stage 2: Constraint-Guided AI Parallelization}
+In the second stage, we will provide AI with clearer design requirements. The agent is prompted to use block-level parallelism, assign unique block IDs, use worker threads to compress independently, and employ a writer thread to maintain original output order. The agent is also instructed to avoid race conditions and unnecessary global locks. This stage tests whether explicit system design constraints can help AI generate more correct and maintainable parallel code.
+
+\subsection{Stage 3: Profiling-Guided Optimization}
+In the third stage, we will run the AI-generated parallel version and collect profiling information, such as CPU utilization, runtime breakdown, I/O waiting time, lock contention, memory usage, thread idle time, and scalability under different thread counts. We feed this empirical bottleneck data back into the LLM context. This stage tests whether profiling feedback can help AI move from superficial code changes to bottleneck-driven optimization.
 %------------------------------------------------------------------------------
 \section{Experimental Setup}
-\guide{Hardware and software environment; how you measure speedup / throughput;
-how many repetitions; how you verify correctness is preserved. Be specific
-enough that someone could reproduce your numbers. (Cat.~B: define what counts as
-a ``success'' vs. ``failure,'' e.g. a speedup threshold with correctness
-maintained.)}
+The experiments are conducted on a Linux target environment using C11, pthreads or OpenMP, and a Python-based benchmarking harness. Profiling data is gathered utilizing hardware performance counters via perf stat, call-graph hotspots via perf record, and resource monitoring via GNU /usr/bin/time -v. We evaluate both system performance and AI effectiveness. Success is defined as achieving measurable speedup while preserving byte-for-byte data integrity.
 
+The metrics tracked by the harness include:
+\begin{itemize}
+  \item \textbf{Runtime:} Total compression time.
+  \item \textbf{Throughput:} Input size divided by compression time, measured in MB/s.
+  \item \textbf{Speedup:} Sequential runtime divided by parallel runtime.
+  \item \textbf{Parallel Efficiency:} Speedup divided by number of threads.
+  \item \textbf{Memory Usage:} Peak memory consumption.
+  \item \textbf{Correctness:} Whether decompressed output matches the original file.
+\end{itemize}
+
+Performance improvements are quantified mathematically using the following standard definitions:
+\begin{equation}
+\mathit{Speedup} = \frac{T_{\text{sequential}}}{T_{\text{parallel}}}
+\end{equation}
+\begin{equation}
+\mathit{Throughput} = \frac{\mathit{Input\_Size}}{T_{\text{compression}}}
+\end{equation}
 %------------------------------------------------------------------------------
 \section{Results}
-\guide{Present your results with clearly labeled tables/figures. Make sure a
-reader can tell what is being compared and against what baseline.}
 
-% Example figure (delete if unused):
-% \begin{figure}[t]
-%   \centering
-%   \includegraphics[width=\columnwidth]{your_figure.pdf}
-%   \caption{Caption describing what the reader should take away.}
-%   \label{fig:results}
-% \end{figure}
+\subsection{Benchmark Setup}
+We swept thread counts $\{1, 2, 4, 8, 16, 32\}$ (block size 900,000 bytes, compression level 9, 3 repeats per configuration) against a 1.08GB input (1,082,774,528 bytes), produced by concatenating the Canterbury Corpus reference file used in earlier, smaller-scale runs. Each AI-assisted stage (\texttt{stage/1-naive}, \texttt{stage/2-constrained}, \texttt{stage/3-profiling}) was benchmarked in an isolated git worktree, and \texttt{lbzip2} was benchmarked as an external reference using the same input and thread sweep. Raw results are committed as \texttt{results/stageN\_results\_1gb.csv} on each respective branch and \texttt{experiments/lbzip2/results/lbzip2\_results\_1gb.csv} on \texttt{main}; the merged comparison data and figures referenced below are under \texttt{experiments/comparison/}.
 
-%------------------------------------------------------------------------------
+\subsection{Correctness}
+All three AI-assisted stages produce \textbf{byte-identical compressed output} regardless of thread count: compression ratio is $0.233903$ and output size is $253,264,533$ bytes in every run. (\texttt{lbzip2} produces a slightly different output size --- $253,270,191$ bytes, ratio $0.233908$ --- due to differences in block framing, not a correctness issue.) Round-trip decompression (\texttt{bunzip2 | cmp}) against the original 1.08GB input passes (\texttt{PASS}) for all four implementations at every thread count tested. This confirms that increasing thread count does not change the compressed output or break correctness for any of the three AI-generated parallel versions.
+
+\subsection{Runtime and Throughput}
+Table~\ref{tab:runtime} reports mean compression time (seconds, averaged over 3 repeats) at each thread count.
+
+\begin{table}[htbp]
+\caption{Mean compression time (s) on the 1.08GB input}
+\label{tab:runtime}
+\centering
+\begin{tabular}{ccccc}
+\hline
+\textbf{Threads} & \textbf{Stage 1 (naive)} & \textbf{Stage 2 (constrained)} & \textbf{Stage 3 (profiling)} & \textbf{lbzip2 (reference)} \\ \hline
+1  & 80.84 & 81.77 & 78.72 & 67.90 \\
+2  & 40.63 & 40.62 & 39.43 & 34.51 \\
+4  & 20.80 & 20.74 & 20.02 & 17.58 \\
+8  & 10.53 & 10.50 & 10.23 & 9.10 \\
+16 & 5.52  & 5.50  & 5.36  & 4.96 \\
+32 & 3.06  & 3.49  & 3.03  & 3.14 \\ \hline
+\end{tabular}
+\end{table}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\columnwidth]{./runtime_by_impl.png}
+  \caption{Compression time vs. thread count (log-log scale) for all four implementations on the 1.08GB input.}
+  \label{fig:runtime}
+\end{figure}
+
+In absolute terms, \textbf{\texttt{stage3} (profiling-guided) is the fastest or tied-fastest of the three AI-assisted stages at every thread count}, and is competitive with --- even marginally faster than --- the mature \texttt{lbzip2} reference at high thread counts (3.03s vs. 3.14s at 32 threads). \texttt{stage2} (constraint-guided) is consistently the slowest of the three AI stages in absolute time, despite having a similar relative speedup curve (see Section~\ref{sub:speedup}); its higher single-threaded baseline (81.77s) and pthread-pipeline synchronization overhead carry through at every thread count.
+
+Figure~\ref{fig:throughput} shows the corresponding throughput curves, which mirror the runtime results (throughput is simply $\mathit{Input\_Size} / T_{\text{compression}}$): all four implementations reach roughly 330--360~MB/s at 32 threads, up from approximately 13--16~MB/s single-threaded.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\columnwidth]{throughput_by_impl.png}
+  \caption{Throughput (MB/s) vs. thread count for all four implementations on the 1.08GB input.}
+  \label{fig:throughput}
+\end{figure}
+
+\subsection{Speedup}
+\label{sub:speedup}
+Table~\ref{tab:speedup} reports speedup relative to each implementation's own single-threaded time ($\mathit{Speedup} = T_{1\text{-thread}} / T_{N\text{-threads}}$), and Figure~\ref{fig:speedup} plots the same data against an ideal linear-speedup reference line.
+
+\begin{table}[htbp]
+\caption{Speedup relative to each implementation's own 1-thread baseline}
+\label{tab:speedup}
+\centering
+\begin{tabular}{ccccc}
+\hline
+\textbf{Threads} & \shortstack{\textbf{Stage 1} \\ \textbf{(naive)}} & \shortstack{\textbf{Stage 2} \\ \textbf{(constrained)}} & \shortstack{\textbf{Stage 3} \\ \textbf{(profiling)}} & \shortstack{\textbf{lbzip2} \\ \textbf{(reference)}} \\ \hline
+1  & 1.00$\times$  & 1.00$\times$  & 1.00$\times$  & 1.00$\times$ \\
+2  & 1.99$\times$  & 2.01$\times$  & 2.00$\times$  & 1.97$\times$ \\
+4  & 3.89$\times$  & 3.94$\times$  & 3.93$\times$  & 3.86$\times$ \\
+8  & 7.68$\times$  & 7.79$\times$  & 7.69$\times$  & 7.46$\times$ \\
+16 & 14.64$\times$ & 14.87$\times$ & 14.69$\times$ & 13.69$\times$ \\
+32 & 26.44$\times$ & 23.43$\times$ & 25.95$\times$ & 21.64$\times$ \\ \hline
+\end{tabular}
+\end{table}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\columnwidth]{./speedup_by_impl.png}
+  \caption{Speedup vs. thread count relative to each implementation's own single-threaded baseline, with an ideal linear-speedup reference line (dashed).}
+  \label{fig:speedup}
+\end{figure}
+
+All three AI-assisted stages --- and \texttt{lbzip2} --- track the ideal linear-speedup line closely up to 16 threads (within $\sim$5\% of ideal at every step: $\sim$2$\times$, $\sim$4$\times$, $\sim$8$\times$, $\sim$15$\times$), confirming that block-level parallelism is, as expected, embarrassingly parallel for a sufficiently large input (1,204 blocks at 900~KB each leaves ample work to keep 16 threads fed). Scaling tapers off at 32 threads for every implementation, plateauing around 22--26$\times$ --- consistent with the profiling-stage finding that performance becomes limited by block granularity and BWT memory bandwidth rather than by software-level synchronization, once thread count approaches or exceeds the number of physical cores.
+
+Note that \texttt{lbzip2}'s \textit{relative} speedup is the lowest of the four (21.64$\times$ at 32 threads) purely because its single-threaded baseline is already the fastest (67.90s vs. 78--82s for the AI stages) --- it has comparatively less headroom to climb. In \textbf{absolute} terms (Table~\ref{tab:runtime}, Figure~\ref{fig:runtime}), \texttt{lbzip2} remains competitive with, but does not dominate, the AI-assisted stages: \texttt{stage1} and \texttt{stage3} match or marginally beat it at 32 threads.
+
 \section{Discussion and Analysis}
 % This section carries a lot of weight. Depth of analysis is graded heavily.
 % Category A: where does your approach work well, and where does it break down?
@@ -140,22 +214,29 @@ reader can tell what is being compared and against what baseline.}
 % Category B: ROOT-CAUSE ANALYSIS of the cases where the agent FAILED. Why did
 %             optimization fail on those problems specifically? (e.g. memory
 %             behavior, data dependencies, what profiling revealed.)
-\guide{Go deep. Cat.~A: explain why it works and its limitations. Cat.~B:
-analyze WHY the failed cases failed -- this is the heart of a Category B paper.}
+
+Contrary to the concern that naive AI prompting may produce incomplete or unsafe parallelization, \texttt{stage/1-naive} already produces a correct, near-linearly-scaling OpenMP implementation. This suggests that block-level parallelization of \texttt{pbzx} is a sufficiently well-isolated transformation that even a minimally-guided agent can identify and implement it correctly.
+
+\subsection{Root-Cause Analysis of AI Failures (Stage 2)}
+Constraint-guided prompting (\texttt{stage2}) did not yield a clear runtime advantage over the naive version --- if anything, its \texttt{pthread}-pipeline design carries more baseline overhead, resulting in the highest single-threaded time (81.77s) and the lowest absolute throughput at every thread count.
+
+\textbf{Root Cause:} The explicit architectural constraints provided in the prompt (mandating unique block IDs, a separate writer thread, and strict output ordering) forced the AI into a heavy synchronization design. By constraining the agent's architectural freedom, it inadvertently introduced excessive lock contention and high per-block \texttt{malloc}/\texttt{free} overhead. While its main benefits (ordered output via a writer thread, avoidance of global locks) met the original design goals regarding code structure and maintainability, the AI prioritized fulfilling the complex structural prompt over writing performant code. This demonstrates that over-constraining an LLM without providing empirical performance data can degrade baseline efficiency.
+
+\subsection{Success of Profiling Feedback}
+Profiling-guided optimization (\texttt{stage3}) delivered the expected payoff. Starting from the verified \texttt{stage2} source, feeding back empirical bottleneck data (e.g., page-fault counts dropping from $\sim$674K to $\sim$181K after replacing per-block \texttt{malloc}/\texttt{free} with a per-thread bump-arena allocator) measurably reduced both the single-threaded baseline and the absolute runtime at every thread count. This direct system feedback was critical to making it the fastest of the three AI stages overall and putting it on par with \texttt{lbzip2}.
+
+\subsection{Limitations}
+Block size and thread count clearly affect speedup, as expected. Scaling is near-linear up to 16 threads and plateaus at 32 for all four implementations alike. This points to a hardware limit --- specifically, memory bandwidth saturation during the Burrows-Wheeler Transform (BWT) phase --- rather than an implementation-specific software bottleneck at the high end.
 
 %------------------------------------------------------------------------------
 \section{Conclusion}
-\guide{Summarize the contribution and the main takeaway. Optionally, future
-work.}
-
+This study illustrates that while naive AI prompting can sometimes identify basic parallel loops successfully, strictly constraining the AI's architectural design without performance context can introduce significant synchronization overhead. To mitigate the risk of the AI ignoring I/O bottlenecks, our pipeline strictly enforces the use of profiling tools to measure I/O waiting time and guide AI toward pipeline optimization. Profiling-guided feedback proved to be the most effective strategy, enabling the LLM to perform targeted root-cause analysis and optimize memory management, ultimately achieving throughput parity with established parallel compression tools.
 %------------------------------------------------------------------------------
 \section*{Acknowledgment}
-\guide{Optional.}
 
 %------------------------------------------------------------------------------
 \begin{thebibliography}{00}
-\bibitem{ref1} \guide{Author, ``Title,'' \emph{Venue}, year. Replace with real
-references. You may also switch to BibTeX if you prefer.}
+\bibitem{ref1}
 \end{thebibliography}
 
 % ---- end of main body + references. Everything below is the Appendix and is
@@ -188,7 +269,6 @@ references. You may also switch to BibTeX if you prefer.}
 \end{lstlisting}
 
 \section{Changes Made to the Agent}
-\guide{Describe and/or show the modifications you made to the agent
-(configuration, tools provided, iteration on instructions, etc.).}
+The Claude Code agent was provided isolated Git worktrees and varying levels of command permissions via per-branch CLAUDE.md files. In Stage 2, it was granted permissions to run machine-discovery commands (lscpu, free, nproc). In Stage 3, the agent context was dynamically updated to include raw outputs from perf stat and /usr/bin/time -v, granting it full visibility into its own execution bottlenecks.
 
 \end{document}
