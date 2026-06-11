@@ -1,4 +1,10 @@
 implementation,threads,mean_compress_seconds,min_compress_seconds,max_compress_seconds,mean_throughput_mbps,samples
+baseline (sequential pbzx),1,85.725957,84.694169,86.263489,12.632,3
+baseline (sequential pbzx),2,83.667658,83.432957,83.902822,12.941,3
+baseline (sequential pbzx),4,84.112985,83.244643,85.687464,12.875,3
+baseline (sequential pbzx),8,85.890042,83.473802,89.363118,12.617,3
+baseline (sequential pbzx),16,85.055299,83.941517,85.703997,12.731,3
+baseline (sequential pbzx),32,85.808753,85.196655,86.894075,12.619,3
 stage1 (naive),1,80.841066,80.778383,80.945744,13.394,3
 stage1 (naive),2,40.626315,40.401797,40.775236,26.652,3
 stage1 (naive),4,20.799247,20.555788,21.039152,52.063,3

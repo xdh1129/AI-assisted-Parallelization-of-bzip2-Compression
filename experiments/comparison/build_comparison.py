@@ -17,6 +17,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 # file as it exists on another branch (the stage1/2/3 1GB sweeps were
 # committed on their respective stage branches, not on main).
 SOURCES = {
+    "baseline (sequential pbzx)": f"{REPO}/experiments/baseline/results/baseline_results_1gb.csv",
     "stage1 (naive)":       "origin/stage/1-naive::results/stage1_results_1gb.csv",
     "stage2 (constrained)": "origin/stage/2-constrained::results/stage2_results_1gb.csv",
     "stage3 (profiling)":   "origin/stage/3-profiling::results/stage3_results_1gb.csv",
