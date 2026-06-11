@@ -7,8 +7,9 @@
 # Usage (run from repo root on the Linux benchmark machine):
 #   bash experiments/pbzip2/run_1gb_sweep.sh [DATA_DIR]
 #
-# Prerequisites: libbz2-dev (for pbzip2's -lbz2), a C++ compiler, bunzip2, bc.
-#   sudo apt-get install -y libbz2-dev build-essential
+# Prerequisites: a C++ compiler with pthreads (g++) and bunzip2. No sudo/apt
+# needed -- pbzip2 is statically linked against this repo's vendored libbz2
+# (built via the top-level Makefile).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -17,10 +18,14 @@ INFILE="$DATA_DIR/bench_large_1g.bin"
 OUT_DIR="$REPO_ROOT/experiments/pbzip2/results"
 PBZIP2="$REPO_ROOT/pbzip2-1.1.13/pbzip2"
 
-# 1. Build pbzip2 if needed
+# 1. Build pbzip2 (statically against the vendored libbz2) if needed
 if [[ ! -x "$PBZIP2" ]]; then
-  echo "Building pbzip2..."
-  make -C "$REPO_ROOT/pbzip2-1.1.13"
+  echo "Building vendored libbz2..."
+  make -C "$REPO_ROOT" libbz2.a
+  echo "Building pbzip2 (static, against vendored libbz2)..."
+  cp "$REPO_ROOT/third_party/bzip2/bzlib.h" "$REPO_ROOT/pbzip2-1.1.13/"
+  cp "$REPO_ROOT/libbz2.a" "$REPO_ROOT/pbzip2-1.1.13/"
+  make -C "$REPO_ROOT/pbzip2-1.1.13" pbzip2-static
 fi
 "$PBZIP2" -V
 
@@ -43,9 +48,9 @@ INSIZE=$(stat -c%s "$INFILE")
       END=$(date +%s%N)
       OUTSIZE=$(stat -c%s "$OUTFILE")
       rm -f "$OUTFILE"
-      SECS=$(echo "scale=6; ($END - $START) / 1000000000" | bc)
-      TPUT=$(echo "scale=3; $INSIZE / 1000000 / $SECS" | bc)
-      RATIO=$(echo "scale=6; $OUTSIZE / $INSIZE" | bc)
+      SECS=$(awk -v a="$START" -v b="$END" 'BEGIN{printf "%.6f", (b-a)/1000000000}')
+      TPUT=$(awk -v sz="$INSIZE" -v s="$SECS" 'BEGIN{printf "%.3f", (sz/1000000)/s}')
+      RATIO=$(awk -v o="$OUTSIZE" -v i="$INSIZE" 'BEGIN{printf "%.6f", o/i}')
       echo "pbzip2,$t,$SECS,$TPUT,$RATIO,$INSIZE,$OUTSIZE" | tee /dev/stderr
     done
   done
