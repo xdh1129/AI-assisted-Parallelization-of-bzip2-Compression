@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Merge the 1GB benchmark sweeps from stage1/2/3 and lbzip2 into a single
-comparison CSV, and render speedup / throughput / runtime charts."""
+"""Merge the 1GB benchmark sweeps from stage1/2/3, lbzip2 and pbzip2 into a
+single comparison CSV, and render speedup / throughput / runtime charts."""
 import csv
+import io
 import os
+import subprocess
 from collections import defaultdict
 
 import matplotlib
@@ -10,21 +12,31 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-WORKTREES = "/tmp/team05_bench_worktrees"
 
+# Each source is either a plain filesystem path, or "gitref::path" to read a
+# file as it exists on another branch (the stage1/2/3 1GB sweeps were
+# committed on their respective stage branches, not on main).
 SOURCES = {
-    "stage1 (naive)":       f"{WORKTREES}/stage-1-naive/results/stage1_results_1gb.csv",
-    "stage2 (constrained)": f"{WORKTREES}/stage-2-constrained/results/stage2_results_1gb.csv",
-    "stage3 (profiling)":   f"{WORKTREES}/stage-3-profiling/results/stage3_results_1gb.csv",
+    "stage1 (naive)":       "origin/stage/1-naive::results/stage1_results_1gb.csv",
+    "stage2 (constrained)": "origin/stage/2-constrained::results/stage2_results_1gb.csv",
+    "stage3 (profiling)":   "origin/stage/3-profiling::results/stage3_results_1gb.csv",
     "lbzip2 (reference)":   f"{REPO}/experiments/lbzip2/results/lbzip2_results_1gb.csv",
+    "pbzip2 (reference)":   f"{REPO}/experiments/pbzip2/results/pbzip2_results_1gb.csv",
 }
 
 OUT_CSV = f"{REPO}/experiments/comparison/all_results_1gb.csv"
 OUT_PLOTS = f"{REPO}/experiments/comparison/plots"
 
 
-def load(path):
-    with open(path) as f:
+def load(source):
+    if "::" in source:
+        ref, path = source.split("::", 1)
+        text = subprocess.run(
+            ["git", "show", f"{ref}:{path}"],
+            cwd=REPO, capture_output=True, text=True, check=True,
+        ).stdout
+        return list(csv.DictReader(io.StringIO(text)))
+    with open(source) as f:
         return list(csv.DictReader(f))
 
 
