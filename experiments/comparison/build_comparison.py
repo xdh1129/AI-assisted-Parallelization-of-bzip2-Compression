@@ -107,10 +107,11 @@ def plot_runtime(times):
 def plot_speedup(times):
     fig, ax = plt.subplots(figsize=(7, 5))
     thread_vals = [1, 2, 4, 8, 16, 32]
+    baseline_means = mean_by_threads(times["baseline (sequential pbzx)"])
+    base = sum(baseline_means.values()) / len(baseline_means)
     ax.plot(thread_vals, thread_vals, linestyle="--", color="gray", label="ideal linear speedup")
     for impl, by_t in times.items():
         means = mean_by_threads(by_t)
-        base = means[1]
         xs = sorted(means)
         ax.plot(xs, [base / means[x] for x in xs], marker="o", label=impl)
     ax.set_xscale("log", base=2)
@@ -120,7 +121,7 @@ def plot_speedup(times):
     ax.set_yticks(thread_vals)
     ax.set_yticklabels([str(v) for v in thread_vals])
     ax.set_xlabel("threads")
-    ax.set_ylabel("speedup (relative to each impl's own 1-thread time)")
+    ax.set_ylabel("speedup (relative to sequential pbzx baseline)")
     ax.set_title("Speedup vs threads (1.08GB input)")
     ax.grid(True, which="both", alpha=0.3)
     ax.legend()
