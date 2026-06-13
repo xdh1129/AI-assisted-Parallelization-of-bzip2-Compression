@@ -159,6 +159,39 @@ class CUDARoundtripTest(unittest.TestCase):
         )
         self.assertEqual(restored, data)
 
+    def test_cuda_huffman_output_matches_reference(self):
+        rng = random.Random(86420)
+        data = (
+            bytes(rng.getrandbits(8) for _ in range(2 * 1024 * 1024)) +
+            bytes(range(256)) * 4096 +
+            b'cuda-huffman-reference-' * 65536
+        )
+        sample = self.path_tmp / 'cuda-huffman.bin'
+        sample.write_bytes(data)
+
+        reference_env = os.environ.copy()
+        reference_env['BZ2_DISABLE_CUDA'] = '1'
+        reference = self.run_bzip2(
+            ['--compress', '-9', '--keep', '--stdout', str(sample)],
+            env=reference_env,
+        )
+
+        accelerated_env = os.environ.copy()
+        accelerated_env['BZ2_CUDA_BWT'] = '1'
+        accelerated_env['BZ2_CUDA_HUFFMAN'] = '1'
+        accelerated = self.run_bzip2(
+            ['--compress', '-9', '--keep', '--stdout', str(sample)],
+            env=accelerated_env,
+        )
+        self.assertEqual(accelerated, reference)
+
+        fallback_env = accelerated_env.copy()
+        fallback_env['BZ2_DISABLE_CUDA'] = '1'
+        fallback = self.run_bzip2(
+            ['--compress', '-9', '--keep', '--stdout', str(sample)],
+            env=fallback_env,
+        )
+        self.assertEqual(fallback, reference)
 
 if __name__ == '__main__':
     unittest.main()

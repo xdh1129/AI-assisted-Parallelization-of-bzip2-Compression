@@ -292,6 +292,7 @@ set(BZ2_SOURCES
 if(ENABLE_CUDA)
     list(APPEND BZ2_SOURCES
         cuda/blocksort_cuda.cu
+        cuda/huffman_cuda.cu
         cuda/blocksort_overlap.c)
 endif()
 

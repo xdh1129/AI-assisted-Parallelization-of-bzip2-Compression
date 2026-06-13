@@ -239,7 +239,9 @@ typedef
 #if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
       /* reusable CUDA blocksort buffers, owned by this compression state */
       void*    cudaBlockSortWorkspace;
+      void*    cudaHuffmanWorkspace;
       Bool     cudaBWTEnabled;
+      Bool     cudaHuffmanEnabled;
       Bool     overlapEnabled;
       Bool     overlapFailed;
       BZ2BlockSlot overlapSlots[2];

@@ -27,6 +27,9 @@
 */
 
 #include "bzlib_private.h"
+#if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
+#include "cuda/huffman_cuda.h"
+#endif
 #include <string.h>
 #include <time.h>
 #if !defined(_WIN32)
@@ -355,6 +358,9 @@ void sendMTFValues ( EState* s )
    Int32 v, t, i, j, gs, ge, totc, bt, bc, iter;
    Int32 nSelectors, alphaSize, minLen, maxLen, selCtr;
    Int32 nGroups, nBytes;
+#if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
+   Bool cudaHuffmanPrepared = False;
+#endif
 
    /*--
    UChar  len [BZ_N_GROUPS][BZ_MAX_ALPHA_SIZE];
@@ -430,6 +436,12 @@ void sendMTFValues ( EState* s )
       }
    }
 
+#if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
+   if (s->cudaHuffmanEnabled)
+      cudaHuffmanPrepared = BZ2_cudaHuffmanPrepare (
+         &s->cudaHuffmanWorkspace, mtfv, s->nMTF, s->verbosity );
+#endif
+
    /*---
       Iterate up to BZ_N_ITERS times to improve the tables.
    ---*/
@@ -456,6 +468,17 @@ void sendMTFValues ( EState* s )
       nSelectors = 0;
       totc = 0;
       gs = 0;
+#if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
+      if (cudaHuffmanPrepared &&
+          BZ2_cudaHuffmanIterate (
+             s->cudaHuffmanWorkspace, s->len, alphaSize, nGroups,
+             s->selector, s->rfreq, fave, &totc, s->verbosity )) {
+         nSelectors = (s->nMTF + BZ_G_SIZE - 1) / BZ_G_SIZE;
+         gs = s->nMTF;
+      } else if (cudaHuffmanPrepared) {
+         cudaHuffmanPrepared = False;
+      }
+#endif
       while (True) {
 
          /*--- Set group start & end marks. --*/

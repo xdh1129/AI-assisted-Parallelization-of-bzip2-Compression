@@ -83,6 +83,21 @@ class CUDAOverlapSurfaceTest(unittest.TestCase):
         self.assertIn('s->blockIsBWT', compress)
         self.assertIn('--compare-cuda-bwt', benchmark)
 
+    def test_cuda_huffman_optimization_is_runtime_opt_in(self):
+        private_header = self.read_text('bzlib_private.h')
+        bzlib = self.read_text('bzlib.c')
+        compress = self.read_text('compress.c')
+        cuda_header = self.read_text('cuda/huffman_cuda.h')
+        cuda_impl = self.read_text('cuda/huffman_cuda.cu')
+        benchmark = self.read_text('bench/cuda_profile_compare.py')
+
+        self.assertIn('BZ2_CUDA_HUFFMAN', bzlib)
+        self.assertIn('cudaHuffmanEnabled', private_header)
+        self.assertIn('BZ2_cudaHuffmanPrepare', cuda_header)
+        self.assertIn('BZ2_cudaHuffmanIterate', cuda_header)
+        self.assertIn('huffman_group_cost_kernel', cuda_impl)
+        self.assertIn('s->cudaHuffmanEnabled', compress)
+        self.assertIn('--compare-cuda-huffman', benchmark)
 
 if __name__ == '__main__':
     unittest.main()

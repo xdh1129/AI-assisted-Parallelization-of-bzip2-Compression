@@ -33,6 +33,7 @@
 #if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
 #include "cuda/blocksort_cuda.h"
 #include "cuda/blocksort_overlap.h"
+#include "cuda/huffman_cuda.h"
 #if !defined(_WIN32)
 #include <sys/time.h>
 #endif
@@ -95,6 +96,18 @@ Bool compress_cuda_bwt_env_enabled ( void )
 {
 #ifndef BZ_NO_STDIO
    const char* value = getenv ( "BZ2_CUDA_BWT" );
+   return (Bool)(value != NULL && value[0] != 0 &&
+                 !(value[0] == '0' && value[1] == 0));
+#else
+   return False;
+#endif
+}
+
+static
+Bool compress_cuda_huffman_env_enabled ( void )
+{
+#ifndef BZ_NO_STDIO
+   const char* value = getenv ( "BZ2_CUDA_HUFFMAN" );
    return (Bool)(value != NULL && value[0] != 0 &&
                  !(value[0] == '0' && value[1] == 0));
 #else
@@ -190,11 +203,13 @@ void print_compress_profile ( EState* s )
              s->profileWorkerSortWaitSeconds,
              s->profileOverlappedSortSeconds,
              s->profileEncodeSeconds );
-   fprintf ( stderr, "bzip2-profile: options cuda_overlap=%d cuda_bwt=%d fast_mtf=%d\n",
+   fprintf ( stderr, "bzip2-profile: options cuda_overlap=%d cuda_bwt=%d cuda_huffman=%d fast_mtf=%d\n",
 #if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
              (Int32)s->overlapEnabled,
              (Int32)s->cudaBWTEnabled,
+             (Int32)s->cudaHuffmanEnabled,
 #else
+             0,
              0,
              0,
 #endif
@@ -497,7 +512,9 @@ int BZ_API(BZ2_bzCompressInit)
    init_compress_profile ( s );
 #if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
    s->cudaBlockSortWorkspace = NULL;
+   s->cudaHuffmanWorkspace = NULL;
    s->cudaBWTEnabled = compress_cuda_bwt_env_enabled();
+   s->cudaHuffmanEnabled = compress_cuda_huffman_env_enabled();
    s->overlapEnabled = False;
    s->overlapFailed = False;
    s->overlapFillSlot = 0;
@@ -960,6 +977,7 @@ int BZ_API(BZ2_bzCompressEnd)  ( bz_stream *strm )
 #if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
    BZ2_cudaOverlapDestroy ( s->cudaOverlapWorker );
    BZ2_cudaBlockSortCleanup ( s->cudaBlockSortWorkspace );
+   BZ2_cudaHuffmanCleanup ( s->cudaHuffmanWorkspace );
    if (s->overlapSlots[0].arr1 != NULL) BZFREE(s->overlapSlots[0].arr1);
    if (s->overlapSlots[0].arr2 != NULL) BZFREE(s->overlapSlots[0].arr2);
    if (s->overlapSlots[0].ftab != NULL) BZFREE(s->overlapSlots[0].ftab);
