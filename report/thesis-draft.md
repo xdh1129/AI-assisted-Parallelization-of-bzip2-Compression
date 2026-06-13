@@ -284,3 +284,47 @@ Table 6 reports best-of-three compression time for stock `lbzip2` (`-O2`) versus
 ### 7.5 Conclusion of the study
 
 This deep-dive yields a clear, if humbling, result. `lbzip2`'s per-core advantage over our AI-assisted `pbzx` is **algorithmic** — a suffix-array (divsufsort) BWT in place of bzip2's comparison-based blocksort — not a matter of better compiler flags or threading tricks. And `lbzip2` is already operating **near the hardware ceiling** on this workload: profiling shows it is branch-prediction-bound in a hand-tuned sort, and *every* generic optimization knob we tried (`-O3`, `-march=native`, `-flto`, PGO, allocator tuning, NUMA interleaving) left it unchanged or slower. Meaningful further gains would require either an algorithm-level change (a different suffix-sort or microarchitecture-specific sort kernel) or accepting a compression-ratio trade-off (e.g., fewer Huffman EM passes). This reinforces a central theme of the project: once a mature, hand-optimized baseline is reached, profiling is as valuable for telling you *where not to spend effort* as for finding wins.
+
+## 8. pbzip2 Implementation Analysis
+
+The third reference tool used in §6, `pbzip2` (Parallel BZIP2, by Jeff Gilchrist with later contributions from Yavor Nikolov), is the most direct point of comparison for our work: like our `pbzx`, it is a parallel front-end *on top of* the stock `libbz2` library rather than a from-scratch reimplementation. Examining its source (v1.1.13, the last release) therefore isolates exactly what a hand-written parallel runtime looks like versus the OpenMP `parallel for` our AI-assisted versions generate. The findings below are from reading the released source (`pbzip2.cpp`, `pbzip2.h`, `BZ2StreamScanner.*`, `Makefile`); they were not re-benchmarked here beyond the §6 numbers.
+
+### 8.1 Same codec, hand-built threading runtime
+
+`pbzip2` is written in C++ and **links `libbz2`** (`Makefile`: `-lbz2`, `-pthread`, `-O2`). Each block is compressed by a single call to `BZ2_bzBuffToBuffCompress(dst, &dstLen, src, srcLen, BWTblockSize, verbosity, 30)` — i.e. bzip2's own block-sorting BWT, MTF/RLE2, and Huffman coder, at the standard work factor of 30. This is the **identical codec path our `pbzx` uses**, so `pbzip2` and `pbzx` share bzip2's comparison-based `blockSort` and therefore the same per-core BWT cost and (modulo block-splitting) the same compression ratio. The difference between the two is entirely in *how work is distributed across cores*.
+
+Where `pbzx` relies on the OpenMP runtime, `pbzip2` implements its own POSIX-threads pipeline with three roles connected by bounded, mutex-guarded queues:
+
+* **One producer thread** (`producer`) reads the input *as a stream* in fixed-size chunks (file block size `-b`, default 900 KB). It allocates a buffer per chunk, tags it with a monotonically increasing `blockNumber`, and pushes it onto a bounded input FIFO (`queueInit(numCPU)`) under a single mutex with `notFull`/`notEmpty` condition variables. Because it never seeks or relies on the file size, `pbzip2` works transparently on pipes and `stdin` (e.g. `tar … | pbzip2`).
+* **`numCPU` worker threads** (`consumer`, count from `-p` or CPU autodetect) each pop a chunk off the FIFO, release the lock, compress the chunk independently with `libbz2`, and deposit the result into a shared **circular output buffer** at the slot derived from its `blockNumber` (`outputBufferAdd` / `getOutputBufferPos`).
+* **One writer thread** (`fileWriter`) drains that output buffer **strictly in `blockNumber` order** (`NextBlockToWrite`), writing each compressed chunk to the output fd and freeing it. In-order draining is what makes the concatenated output deterministic regardless of the order in which workers finish.
+
+Back-pressure is explicit and memory-bounded: the producer blocks when the input FIFO is full; a worker blocks in `outputBufferAdd` when its block number runs too far ahead of the writer; and the writer waits on a condition variable when its next in-order slot is empty. The reorder window is sized from the memory cap, `NumBufferedBlocksMax = maxMemory / blockSize` (default `-m` = 100 MB), so RAM use stays bounded no matter how many blocks are in flight. The tool adds a signal-handler thread and a terminator thread for clean teardown, plus optional load-average throttling (`-l`) and a tunable child stack size (`-S`) to limit per-thread memory at very high thread counts.
+
+### 8.2 Block independence and the multi-stream `.bz2` format
+
+Each chunk is compressed as a **complete, independent bzip2 stream**, and the output file is simply the concatenation of those streams:
+
+```
+bzip2:   [-------------------- one stream --------------------]
+pbzip2:  [--stream--|--stream--|--stream--|--stream--|--stream--]
+```
+
+This is the source of two well-known `pbzip2` properties. First, output is typically **< 0.2 % larger** than serial bzip2, because every chunk carries its own stream header/footer and resets the BWT block boundary (the final sub-block of each chunk is usually short). Second, the format remains **fully `bzip2`-compatible**: stock `bzip2` transparently decodes concatenated streams, so anything `pbzip2` writes can be read by `bzip2` and vice-versa. The same structure also lets `pbzip2` *decompress* in parallel — `BZ2StreamScanner` locates stream boundaries so chunks can be farmed out to workers — but only for files that were themselves produced as multi-stream (a file written by serial `bzip2` is one indivisible stream and decompresses single-threaded). Note that the file block size `-b` is distinct from the BWT block size `-1..-9`; with `-r` the producer instead sets `blockSize = fileSize / numCPU` to spread one read-into-RAM file evenly across workers.
+
+### 8.3 Positioning relative to pbzx and lbzip2
+
+Table 7 places `pbzip2` against the other two parallel implementations on the three axes that matter — codec, parallel runtime, and resulting ratio.
+
+**Table 7 — Design comparison of the three parallel bzip2 implementations**
+
+| | `pbzx` (ours) | `pbzip2` | `lbzip2` |
+| --- | --- | --- | --- |
+| Language | C + OpenMP | C++ + pthreads | C + pthreads |
+| BWT / codec | `libbz2` blocksort | `libbz2` blocksort | own `divbwt` (divsufsort) |
+| Parallel model | OpenMP fork/join `parallel for` | reader → worker pool → ordered writer | reader → worker pool → ordered muxer |
+| Streaming (pipe) input | partitioned up front | yes (streaming producer) | yes (streaming reader) |
+| Parallel decompress | no | yes (multi-stream only) | yes (multi-stream only) |
+| Compression ratio | bzip2 baseline | bzip2 baseline (≈ identical) | bzip2 baseline (≈ identical) |
+
+Two conclusions follow directly from the source, consistent with the §6 measurements. (1) Because `pbzip2` and `pbzx` share the *same* `libbz2` codec, they have essentially the **same per-core throughput and compression ratio**; their differences are confined to scheduling — `pbzip2`'s persistent producer/worker/writer pipeline overlaps disk read, compression, and write and accepts pipes, whereas the OpenMP fork/join model partitions data up front and synchronizes at a barrier. `pbzip2` is, in effect, the hand-coded ancestor of the same block-parallel idea our AI-assisted versions express through OpenMP. (2) `pbzip2` shares `lbzip2`'s *threading architecture* (a reader feeding a worker pool drained by one order-preserving writer) but **not** its BWT: `pbzip2` keeps bzip2's comparison-based blocksort, so it trails `lbzip2` per core for exactly the reason established for `pbzx` in §7.1 — the suffix-array (divsufsort) BWT, not the threading layer, is what makes `lbzip2` faster. The pipeline-versus-fork/join distinction shapes I/O overlap and scaling smoothness; the per-core speed gap is algorithmic.
