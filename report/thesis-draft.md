@@ -213,3 +213,74 @@ These results update the expectations laid out in §5:
   all phases. Once sorting is accelerated, the bottleneck shifts to more sequential stages such as MTF and final encoding. Therefore, the main lesson from the GPU branch is not simply
   that “GPU makes bzip2 faster,” but that selective acceleration works best when applied to phases with strong data parallelism, while inherently sequential transformations remain
   difficult to accelerate efficiently on GPU hardware.
+
+---
+
+## 7. lbzip2 Implementation Analysis and Direct Optimization Study
+
+Throughout §6, `lbzip2` served as the external reference and was consistently the fastest *single-threaded* implementation. This raises two questions that the comparison sweep alone does not answer: (1) *why* is `lbzip2` faster per core, given that it emits the same `.bz2` format, and (2) is `lbzip2` itself still improvable, or has it already reached the limits of this hardware? We investigate both on a dedicated branch (`feat/lbzip2-optimize`) that vendors `lbzip2`'s source and drives it through the *same* benchmarking harness via a thin adapter (mapping the `pbzx` CLI onto `lbzip2`'s flags and emitting the harness's `PBZX_STATS` line).
+
+**Setup for this section.** Unlike §6 (Canterbury Corpus, thread sweep to 32), this focused study uses the **Silesia corpus tiled to 1.08 GB** (compression ratio ≈ 0.261, a representative real-world text/binary mix) and extends the thread sweep to **144** on a 2× Intel Xeon Platinum 8352V node (72 physical / 144 logical cores). The different corpus is why `lbzip2`'s absolute single-threaded time here (≈51 s) differs from §6's Canterbury figure (≈68 s); suffix-sort cost is data-dependent. Raw data is committed on the branch as `results/lbzip2_baseline_1gb.csv` and `results/pbzx_compare_1gb.csv`.
+
+### 7.1 Where lbzip2's speed comes from: the BWT algorithm
+
+Both `pbzx` and `lbzip2` produce byte-compatible bzip2 output and run the identical logical pipeline — `RLE1 → BWT → MTF → RLE2 → Huffman → bitstream` — so their compression ratios are essentially equal (0.2607 vs. 0.2608 on this input). The entire per-core speed difference is concentrated in **one stage: the Burrows–Wheeler Transform (BWT)**, which reorders a block by *sorting all of its suffixes*. The sorted order is unique, so both tools compute the same BWT; they differ only in the sorting algorithm used.
+
+* **`pbzx` → bzip2's `BZ2_blockSort` (Seward's algorithm).** `pbzx` links `libbz2`, so each block is sorted by `mainSort` (`blocksort.c`). It buckets suffixes by their first two bytes and then **quicksorts each bucket by comparing suffixes byte-by-byte**, using a "quadrant" table to reuse some comparison work and a *work-budget* that bails out to a slower `fallbackSort` on pathologically repetitive data. Its weakness is exactly those repeated byte-by-byte string comparisons, which do redundant work on inputs with long repeats.
+
+* **`lbzip2` → its own `divbwt` (libdivsufsort).** `lbzip2` does not use `libbz2` at all; `divbwt.c` is a complete suffix-array constructor based on **induced sorting**. It classifies suffixes into types, sorts only the smaller "type B\*" subset with `sssort` (a multikey introsort over short substrings), and then **induces** the order of all remaining suffixes from that sorted subset with `trsort` (a tandem-repeat sort that handles periodic runs cheaply). This performs far less redundant comparison work, degrades gracefully on repetitive input, and never needs a fallback path.
+
+This is the decisive algorithmic difference: `lbzip2` swaps bzip2's comparison-based suffix sort for a suffix-array (induced-sorting) BWT that computes the identical result with less work. A secondary difference is the *parallelization architecture* — `pbzx` uses an OpenMP fork/join `parallel for` over independent 900 KB blocks, whereas `lbzip2` uses a hand-built `pthread` pipeline (one reader thread, a worker pool, one order-preserving writer/muxer thread, linked by priority queues). Because *both* parallelize at the block level, however, this architecture affects scaling smoothness and I/O overlap rather than raw per-core throughput; the per-core advantage is the BWT algorithm.
+
+### 7.2 Profiling lbzip2
+
+A single-threaded `perf record` run on a 128 MB Silesia slice gives the self-time breakdown in Table 4. The suffix-sort routines (`divbwt` plus the `ss_*` substring-sort and `tr_*` tandem-repeat-sort phases of `divsufsort`) account for **≈47 %** of runtime; the entropy-coding stages (`encode`, `generate_prefix_code`) account for ≈16 %.
+
+**Table 4 — lbzip2 single-thread self-time (perf, 128 MB Silesia, level 9)**
+
+| Function | Self time | Stage |
+| --- | ---: | --- |
+| `divbwt` | 17.6 % | BWT (divsufsort driver) |
+| `ss_mintrosort` | 12.2 % | BWT (substring sort) |
+| `encode` | 10.2 % | MTF / RLE2 |
+| `tr_partition` | 8.5 % | BWT (tandem-repeat sort) |
+| `tr_introsort` | 6.6 % | BWT (tandem-repeat sort) |
+| `generate_prefix_code` | 5.4 % | Huffman tree optimization |
+| `collect` | 4.3 % | RLE1 / input collection |
+
+Crucially, the TopdownL1 microarchitecture breakdown attributes **84.7 % of slots to *bad speculation*** (branch mispredictions), with only ≈11 % retiring. The bottleneck is therefore the data-dependent branches inside the suffix-sort comparisons — `lbzip2` is compute-bound and limited by branch prediction, not by memory latency, I/O, or synchronization at the single-thread level.
+
+### 7.3 Optimization attempts
+
+Guided by §7.2, we attempted to speed up `lbzip2` itself. To suppress the noise of a shared, frequency-scaling node, single-thread numbers below are **medians of pinned-core runs** (`taskset`). Output was verified byte-identical (round-trip `bunzip2 | cmp`) for every build.
+
+**Table 5 — Build/runtime optimization attempts (single-thread, pinned, 128 MB Silesia)**
+
+| Variant | Median time | vs. `-O2` |
+| --- | ---: | ---: |
+| `-O2` (stock) | 6.09 s | — |
+| `-O3 -march=native -funroll-loops` | 6.34 s | **+4 % (slower)** |
+| `… + -flto` | ≈6.4 s | neutral / slower |
+| Profile-guided optimization (PGO) | 6.29 s | +3 % (slower) |
+
+Every codegen lever *regressed or was neutral*: `-O3`'s aggressive unrolling/inlining bloats the hot sort loops (hurting the instruction cache and branch predictor), and PGO reduced retired instructions but *raised* branch-misses, so it was net slower — unsurprising, since the dominant cost is data-dependent mispredicts that static profiles cannot eliminate. Runtime/system tuning fared the same: forcing the glibc allocator to recycle large buffers (`MALLOC_MMAP_MAX_=0`) gave 808 vs. 853 MB/s at 144 threads, and `numactl --interleave=all` gave 814 vs. 859 MB/s — both slightly *worse* — confirming `lbzip2` is neither allocator- nor NUMA-bound here.
+
+The only lever with a measurable gain was algorithmic: `lbzip2`'s Huffman tree optimization runs `CLUSTER_FACTOR = 8` Expectation–Maximization passes (bzip2 uses 4). Because EM converges quickly, reducing it to 4 made compression **5.3 % faster** (6.09 → 5.77 s) for only **0.086 % larger output** (ratio 0.25293 → 0.25315). We nonetheless **kept the stock value (8)** so that, for a given input, `lbzip2` produces byte-identical output regardless of build or thread count — reproducibility was preferred over a sub-ratio speed trade. We therefore ship `lbzip2` unmodified.
+
+### 7.4 Extended scaling and head-to-head (to 144 threads)
+
+Table 6 reports best-of-three compression time for stock `lbzip2` (`-O2`) versus the Stage-3 `pbzx` build on the identical 1.08 GB Silesia input, extending the sweep to 144 threads.
+
+**Table 6 — lbzip2 vs. Stage-3 pbzx, Silesia 1.08 GB (best compression time, s)**
+
+| threads | 1 | 2 | 4 | 8 | 16 | 32 | 64 | 96 | 144 |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `lbzip2` | 51.6 | 26.4 | 13.8 | 7.0 | 3.8 | 2.5 | 2.0 | 1.6 | 1.3 |
+| `pbzx` (stage3) | 85.6 | 42.8 | 21.6 | 11.0 | 5.8 | 3.0 | 2.1 | 1.9 | 1.8 |
+| speedup (pbzx/lbzip2) | 1.66× | 1.62× | 1.57× | 1.57× | 1.52× | 1.21× | 1.07× | 1.19× | 1.35× |
+
+`lbzip2` is faster at every thread count, with the advantage largest where compute dominates (1.66× at one thread) and narrowing in the bandwidth-bound regime. Both implementations' throughput flattens past ≈48–64 threads, with `lbzip2` reaching ≈809 MB/s at 144 threads — consistent with §6.5's conclusion that the high-thread regime is limited by memory bandwidth and SMT contention (144 logical = 72 physical cores) rather than by software.
+
+### 7.5 Conclusion of the study
+
+This deep-dive yields a clear, if humbling, result. `lbzip2`'s per-core advantage over our AI-assisted `pbzx` is **algorithmic** — a suffix-array (divsufsort) BWT in place of bzip2's comparison-based blocksort — not a matter of better compiler flags or threading tricks. And `lbzip2` is already operating **near the hardware ceiling** on this workload: profiling shows it is branch-prediction-bound in a hand-tuned sort, and *every* generic optimization knob we tried (`-O3`, `-march=native`, `-flto`, PGO, allocator tuning, NUMA interleaving) left it unchanged or slower. Meaningful further gains would require either an algorithm-level change (a different suffix-sort or microarchitecture-specific sort kernel) or accepting a compression-ratio trade-off (e.g., fewer Huffman EM passes). This reinforces a central theme of the project: once a mature, hand-optimized baseline is reached, profiling is as valuable for telling you *where not to spend effort* as for finding wins.
