@@ -267,19 +267,8 @@ Every codegen lever *regressed or was neutral*: `-O3`'s aggressive unrolling/inl
 
 The only lever with a measurable gain was algorithmic: `lbzip2`'s Huffman tree optimization runs `CLUSTER_FACTOR = 8` Expectation–Maximization passes (bzip2 uses 4). Because EM converges quickly, reducing it to 4 made compression **5.3 % faster** (6.09 → 5.77 s) for only **0.086 % larger output** (ratio 0.25293 → 0.25315). We nonetheless **kept the stock value (8)** so that, for a given input, `lbzip2` produces byte-identical output regardless of build or thread count — reproducibility was preferred over a sub-ratio speed trade. We therefore ship `lbzip2` unmodified.
 
-### 7.4 Extended scaling and head-to-head (to 144 threads)
 
-Table 6 reports best-of-three compression time for stock `lbzip2` (`-O2`) versus the Stage-3 `pbzx` build on the identical 1.08 GB Silesia input, extending the sweep to 144 threads.
 
-**Table 6 — lbzip2 vs. Stage-3 pbzx, Silesia 1.08 GB (best compression time, s)**
-
-| threads | 1 | 2 | 4 | 8 | 16 | 32 | 64 | 96 | 144 |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `lbzip2` | 51.6 | 26.4 | 13.8 | 7.0 | 3.8 | 2.5 | 2.0 | 1.6 | 1.3 |
-| `pbzx` (stage3) | 85.6 | 42.8 | 21.6 | 11.0 | 5.8 | 3.0 | 2.1 | 1.9 | 1.8 |
-| speedup (pbzx/lbzip2) | 1.66× | 1.62× | 1.57× | 1.57× | 1.52× | 1.21× | 1.07× | 1.19× | 1.35× |
-
-`lbzip2` is faster at every thread count, with the advantage largest where compute dominates (1.66× at one thread) and narrowing in the bandwidth-bound regime. Both implementations' throughput flattens past ≈48–64 threads, with `lbzip2` reaching ≈809 MB/s at 144 threads — consistent with §6.5's conclusion that the high-thread regime is limited by memory bandwidth and SMT contention (144 logical = 72 physical cores) rather than by software.
 
 ### 7.5 Conclusion of the study
 

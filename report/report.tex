@@ -51,15 +51,17 @@
 {\footnotesize Final Project --- Parallel Programming, Spring 2026}}
 
 \author{%
-\IEEEauthorblockN{[Student Name(s)]}
-\IEEEauthorblockA{[Student ID(s)] \\ {[Department / Institution]} \\ {[email]}}%
+\IEEEauthorblockN{Lin Ching-Yun, Hsieh Tien-Hua, Cheng Yu-Shiang}
+\IEEEauthorblockA{Department of Computer Science and Information Engineering \\
+National Taiwan University \\
+\{b12902116, b11902088, b12902025\}@ntu.edu.tw}%
 }
 
 \maketitle
 
 %------------------------------------------------------------------------------
 \begin{abstract}
-Data compression is a critical component of high-performance computing, with algorithms like bzip2 prized for their high compression ratios . bzip2 internally processes data in blocks, making it a potential candidate for parallelization. However, effectively parallelizing this process requires careful management of output ordering, synchronization overhead, and I/O bottlenecks. This paper explores the efficacy of Large Language Models (LLMs) in automating the parallelization of a sequential bzip2 compressor (pbzx). We evaluate an AI-assisted development workflow across three progressive stages of guidance: naive prompting, constraint-guided design, and profiling-guided optimization. By comparing these AI-generated implementations against a sequential baseline and an established parallel reference (lbzip2) [cite: 64, 65], we analyze how varying levels of system-level feedback impact the correctness, speedup, and parallel efficiency of AI-generated C code. Our results show that profiling-guided optimization achieves the best performance, reaching throughput parity with hand-optimized tools, while strict constraint-guided prompting inadvertently introduces structural bottlenecks.
+Data compression is a critical component of high-performance computing, with algorithms like bzip2 prized for their high compression ratios . bzip2 internally processes data in blocks, making it a potential candidate for parallelization. However, effectively parallelizing this process requires careful management of output ordering, synchronization overhead, and I/O bottlenecks. This paper explores the efficacy of Large Language Models (LLMs) in automating the parallelization of a sequential bzip2 compressor (pbzx). We evaluate an AI-assisted development workflow across three progressive stages of guidance: naive prompting, constraint-guided design, and profiling-guided optimization. By comparing these AI-generated implementations against a sequential baseline and an established parallel reference (lbzip2), we analyze how varying levels of system-level feedback impact the correctness, speedup, and parallel efficiency of AI-generated C code. Our results show that profiling-guided optimization achieves the best performance, reaching throughput parity with hand-optimized tools, while strict constraint-guided prompting inadvertently introduces structural bottlenecks.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -94,6 +96,15 @@ bzip2 processes data in independent blocks, so block-level parallelism is possib
   \item \textbf{Baseline:} To isolate the effects of our parallelization strategies, we utilize pbzx, a custom C11 baseline that sequentially compresses blocks using vendored libbz2. We compare the AI-generated implementations against lbzip2, a highly optimized, existing parallel implementation.
   \item \textbf{AI Agent Setup:} The Claude Code agent operates autonomously within isolated Git worktrees for each stage.
 \end{itemize}
+
+
+\subsection{lbzip2: Algorithmic Optimization}
+\texttt{lbzip2} emits byte-compatible \texttt{.bz2} output but does not link \texttt{libbz2} at all. The two implementations run the identical logical pipeline and differ in a single stage---the Burrows--Wheeler Transform. \texttt{libbz2} (used by \texttt{pbzx}) sorts suffixes with a comparison-based blocksort that, on repetitive input, performs redundant byte-by-byte comparisons and falls back to a slower path on pathological data. \texttt{lbzip2} instead uses its own \texttt{divbwt} (libdivsufsort), a suffix-array constructor based on \emph{induced sorting}: it sorts only a small subset of suffixes and \emph{induces} the order of the rest, computing the identical BWT with far less work and degrading gracefully without a fallback path. For parallelism it uses a hand-built \texttt{pthread} pipeline (reader, worker pool, order-preserving muxer) rather than OpenMP fork/join.
+
+Across our sweeps \texttt{lbzip2} was consistently the fastest \emph{per-core} implementation, so we profiled it to locate the source and assess whether it could be improved further. Single-threaded \texttt{perf} on a Silesia slice shows suffix-sort routines dominating ($\sim$47\% of self-time), and the TopdownL1 breakdown attributes 84.7\% of slots to bad speculation (branch mispredicts)---\texttt{lbzip2} is compute- and branch-prediction-bound, not memory- or I/O-bound. Consistently, every generic optimization knob we tried (\texttt{-O3 -march=native}, \texttt{-flto}, profile-guided optimization, allocator tuning, NUMA interleaving) left it unchanged or slightly \emph{slower}. We therefore ship \texttt{lbzip2} unmodified: its per-core edge is algorithmic, and it already operates near the hardware ceiling on this workload.
+
+\subsection{pbzip2: Hand-Built Parallel Runtime}
+\texttt{pbzip2} is the most direct point of comparison for our work: like \texttt{pbzx}, it is a parallel front-end \emph{on top of} stock \texttt{libbz2} rather than a reimplementation, so it shares bzip2's comparison-based codec and thus the same per-core BWT cost and compression ratio. The two differ only in how work is distributed. Where \texttt{pbzx} uses an OpenMP fork/join \texttt{parallel for}, \texttt{pbzip2} implements a hand-built POSIX-threads pipeline with three roles connected by bounded, mutex-guarded queues: one \emph{producer} reads the input as a stream in fixed-size chunks (so it accepts pipes and \texttt{stdin}), a pool of \emph{worker} threads compress chunks independently with \texttt{libbz2}, and one \emph{writer} drains the results strictly in block-number order to keep the output deterministic. Back-pressure is explicit and memory-bounded by a configurable reorder window. Each chunk is emitted as a complete, independent bzip2 stream and the output is their concatenation; this keeps the file fully \texttt{bzip2}-compatible and enables parallel \emph{decompression} of multi-stream files, at the cost of output typically $<$\,0.2\% larger than serial bzip2. \texttt{pbzip2} is, in effect, the hand-coded ancestor of the same block-parallel idea our AI-assisted versions express through OpenMP.
 %------------------------------------------------------------------------------
 \section{Methodology}
 % Category A: your optimization / design approach. What did you change, and why?
@@ -229,6 +240,32 @@ Profiling-guided optimization (\texttt{stage3}) delivered the expected payoff. S
 Block size and thread count clearly affect speedup, as expected. Scaling is near-linear up to 16 threads and plateaus at 32 for all four implementations alike. This points to a hardware limit --- specifically, memory bandwidth saturation during the Burrows-Wheeler Transform (BWT) phase --- rather than an implementation-specific software bottleneck at the high end.
 
 %------------------------------------------------------------------------------
+\section{Additional Study: GPU Acceleration Inside libbz2}
+Beyond the CPU-side, block-level parallelization studied above, we conducted a follow-up experiment on a separate GPU branch to assess whether the \emph{intra-block} stages of the standard \texttt{libbz2} compression path could be offloaded to CUDA while preserving both the \texttt{.bz2} format and the public API.
+
+Profiling the single-threaded path showed that block sorting dominated runtime, making it the natural first GPU target. We implemented three optimizations: (i) offloading \texttt{BZ2\_blockSort} to CUDA; (ii) generating the BWT last column directly on the GPU (\texttt{BZ2\_CUDA\_BWT}), so the subsequent MTF stage reads the transformed block sequentially rather than through the random-access \texttt{block[ptr[i]-1]} pattern; and (iii) a CUDA-assisted Huffman table optimization (\texttt{BZ2\_CUDA\_HUFFMAN}) that parallelizes per-group code-cost evaluation and frequency accumulation, while leaving final bitstream emission on the CPU to preserve the stream format.
+
+Table~\ref{tab:gpu} summarizes results on the 1\,GB input. The CPU fallback required 85.80\,s, of which block sorting accounted for 60.97\,s (76.6\%). Offloading sorting to CUDA cut total time to 33.44\,s; GPU-side BWT generation further reduced it to 29.95\,s (MTF: 11.88\,s\,$\rightarrow$\,8.11\,s); and CUDA-assisted Huffman optimization brought it to 27.04\,s (bitstream phase: 6.88\,s\,$\rightarrow$\,4.18\,s), a $3.17\times$ end-to-end speedup over the fallback.
+
+\begin{table}[htbp]
+\caption{GPU extension results on the 1\,GB input}
+\label{tab:gpu}
+\centering
+\begin{tabular}{lcl}
+\hline
+\textbf{Configuration} & \shortstack{\textbf{Time} \\ \textbf{(s)}} & \textbf{Bottleneck after} \\ \hline
+CPU fallback                & 85.80 & CPU block sort \\
++ CUDA block sort           & 33.44 & CPU MTF / Huffman \\
++ GPU BWT                   & 29.95 & CPU MTF / Huffman \\
++ CUDA Huffman              & 27.04 & MTF (sequential) \\ \hline
+\end{tabular}
+\end{table}
+
+Not all stages benefited. An experimental CUDA MTF prototype, which computed MTF ranks on the GPU while leaving zero-run compaction on the CPU, preserved correctness but degraded performance severely: total time rose to 136.14\,s, with the MTF phase alone reaching 114.41\,s. This reflects the inherently sequential nature of MTF---each symbol depends on the evolving recency ordering of earlier symbols---so a naive parallel backward-scan incurs excessive repeated work and poor memory behavior on the GPU. The prototype was therefore removed from the final path.
+
+The broader lesson mirrors the CPU study: selective acceleration is most effective when applied to phases with strong data parallelism (block sorting, table optimization), whereas accelerating one dominant phase merely migrates the bottleneck to the next, inherently sequential stage (here, MTF and final encoding), which resists efficient GPU implementation.
+
+%------------------------------------------------------------------------------
 \section{Conclusion}
 This study illustrates that while naive AI prompting can sometimes identify basic parallel loops successfully, strictly constraining the AI's architectural design without performance context can introduce significant synchronization overhead. To mitigate the risk of the AI ignoring I/O bottlenecks, our pipeline strictly enforces the use of profiling tools to measure I/O waiting time and guide AI toward pipeline optimization. Profiling-guided feedback proved to be the most effective strategy, enabling the LLM to perform targeted root-cause analysis and optimize memory management, ultimately achieving throughput parity with established parallel compression tools.
 %------------------------------------------------------------------------------
@@ -236,7 +273,17 @@ This study illustrates that while naive AI prompting can sometimes identify basi
 
 %------------------------------------------------------------------------------
 \begin{thebibliography}{00}
-\bibitem{ref1}
+\bibitem{ref_bzip2wiki}
+``Bzip2,'' \emph{Wikipedia}. [Online]. Available: \url{https://zh.wikipedia.org/zh-tw/Bzip2}. [Accessed: Jun.~13, 2026].
+
+\bibitem{ref_pbzip2}
+``pbzip2,'' \emph{Compression}. [Online]. Available: \url{https://compression.great-site.net/pbzip2/?i=1}. [Accessed: Jun.~13, 2026].
+
+\bibitem{ref_lbzip2}
+K.~J. Nesbitt, ``lbzip2: Parallel bzip2 utility,'' GitHub repository. [Online]. Available: \url{https://github.com/kjn/lbzip2}. [Accessed: Jun.~13, 2026].
+
+\bibitem{ref_bzip2}
+``bzip2,'' GitLab repository. [Online]. Available: \url{https://gitlab.com/bzip2/bzip2}. [Accessed: Jun.~13, 2026].
 \end{thebibliography}
 
 % ---- end of main body + references. Everything below is the Appendix and is
