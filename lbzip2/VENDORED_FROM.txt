@@ -1,0 +1,3 @@
+UPSTREAM: https://github.com/kjn/lbzip2 @ 724352c0495904ab16e33817fae85b262f319318
+Note: upstream tests/suite/ fuzz corpus removed to reduce repo size;
+not needed to build the lbzip2 binary or run the project benchmark harness.

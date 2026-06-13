@@ -20,3 +20,6 @@ data/
 # python
 __pycache__/
 .pytest_cache/
+
+# lbzip2 vendored-fork build trees (regenerable via cmake)
+lbzip2/build*/
