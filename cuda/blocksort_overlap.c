@@ -11,6 +11,7 @@ typedef struct {
    Bool success;
    UInt32* ptr;
    UChar* block;
+   UChar* bwt;
    Int32 nblock;
    Int32 verbosity;
    Int32 origPtr;
@@ -34,6 +35,7 @@ static void* overlap_sort_thread ( void* opaque )
    worker->success = BZ2_cudaBlockSort ( &worker->cudaWorkspace,
                                          worker->ptr,
                                          worker->block,
+                                         worker->bwt,
                                          worker->nblock,
                                          worker->verbosity );
    worker->origPtr = -1;
@@ -58,6 +60,7 @@ void* BZ2_cudaOverlapCreate ( void )
 Bool BZ2_cudaOverlapLaunch ( void* opaque,
                              UInt32* ptr,
                              UChar* block,
+                             UChar* bwt,
                              Int32 nblock,
                              Int32 verbosity )
 {
@@ -67,6 +70,7 @@ Bool BZ2_cudaOverlapLaunch ( void* opaque,
 
    worker->ptr = ptr;
    worker->block = block;
+   worker->bwt = bwt;
    worker->nblock = nblock;
    worker->verbosity = verbosity;
    worker->success = False;

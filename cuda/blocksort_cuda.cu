@@ -14,6 +14,7 @@ const int kThreadsPerBlock = 256;
 
 struct CudaBlockSortWorkspace {
    UChar* d_block;
+   UChar* d_bwt;
    UInt32* d_rank_a;
    UInt32* d_rank_b;
    UInt32* d_indices_in;
@@ -92,6 +93,20 @@ void scatter_ranks_kernel ( const UInt32* sortedIndices,
    ranksOut[sortedIndices[i] & (UInt32)kIndexMask] = sortedRanks[i];
 }
 
+__global__
+void bwt_last_column_kernel ( const UChar* block,
+                              const UInt32* sortedIndices,
+                              UChar* bwt,
+                              Int32 nblock )
+{
+   Int32 i = (Int32)(blockIdx.x * blockDim.x + threadIdx.x);
+   UInt32 blockIndex;
+   if (i >= nblock) return;
+   blockIndex = sortedIndices[i] & (UInt32)kIndexMask;
+   if (blockIndex == 0) blockIndex = (UInt32)nblock;
+   bwt[i] = block[blockIndex - 1];
+}
+
 Bool cuda_disabled ( void )
 {
    const char* disabled = getenv ( "BZ2_DISABLE_CUDA" );
@@ -137,6 +152,7 @@ void release_device_buffers ( CudaBlockSortWorkspace* workspace )
    cudaFree ( workspace->d_rank_b );
    cudaFree ( workspace->d_rank_a );
    cudaFree ( workspace->d_block );
+   cudaFree ( workspace->d_bwt );
 
    workspace->d_keys_out = NULL;
    workspace->d_keys_in = NULL;
@@ -147,6 +163,7 @@ void release_device_buffers ( CudaBlockSortWorkspace* workspace )
    workspace->d_rank_b = NULL;
    workspace->d_rank_a = NULL;
    workspace->d_block = NULL;
+   workspace->d_bwt = NULL;
    workspace->capacity = 0;
 }
 
@@ -266,6 +283,7 @@ extern "C"
 Bool BZ2_cudaBlockSort ( void** opaqueWorkspace,
                          UInt32* ptr,
                          UChar* block,
+                         UChar* bwt,
                          Int32 nblock,
                          Int32 verbosity )
 {
@@ -363,6 +381,22 @@ Bool BZ2_cudaBlockSort ( void** opaqueWorkspace,
                                   cudaMemcpyDeviceToHost ),
                      "cudaMemcpy(ptr)", verbosity ))
       return False;
+
+   if (bwt != NULL) {
+      if (workspace->d_bwt == NULL &&
+          !check_cuda ( cudaMalloc ( (void**)&workspace->d_bwt,
+                                     workspace->capacity * sizeof(UChar) ),
+                        "cudaMalloc(bwt)", verbosity )) return False;
+      bwt_last_column_kernel<<<blocks, kThreadsPerBlock>>>
+         ( workspace->d_block, workspace->d_indices_out,
+           workspace->d_bwt, nblock );
+      if (!check_cuda ( cudaGetLastError (), "bwt_last_column_kernel",
+                        verbosity )) return False;
+      if (!check_cuda ( cudaMemcpy ( bwt, workspace->d_bwt,
+                                     (size_t)nblock * sizeof(UChar),
+                                     cudaMemcpyDeviceToHost ),
+                        "cudaMemcpy(bwt)", verbosity )) return False;
+   }
 
    return True;
 }

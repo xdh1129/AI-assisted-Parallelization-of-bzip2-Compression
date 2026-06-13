@@ -285,6 +285,7 @@ set(BZ2_SOURCES
     crctable.c
     randtable.c
     compress.c
+    mtf_profile.c
     decompress.c
     bzlib.c)
 

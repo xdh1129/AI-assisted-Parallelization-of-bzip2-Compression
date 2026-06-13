@@ -196,10 +196,12 @@ typedef
       UInt32*  arr1;
       UInt32*  arr2;
       UInt32*  ftab;
+      UChar*   bwt;
       Int32    nblock;
       UInt32   blockCRC;
       Int32    blockNo;
       Int32    origPtr;
+      Bool     blockIsBWT;
       Bool     inUse[256];
    }
    BZ2BlockSlot;
@@ -228,6 +230,8 @@ typedef
       UChar*   block;
       UInt16*  mtfv;
       UChar*   zbits;
+      UChar*   bwt;
+      Bool     blockIsBWT;
 
       /* for deciding when to use the fallback sorting algorithm */
       Int32    workFactor;
@@ -235,6 +239,7 @@ typedef
 #if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
       /* reusable CUDA blocksort buffers, owned by this compression state */
       void*    cudaBlockSortWorkspace;
+      Bool     cudaBWTEnabled;
       Bool     overlapEnabled;
       Bool     overlapFailed;
       BZ2BlockSlot overlapSlots[2];
@@ -249,6 +254,10 @@ typedef
       /* optional internal compression profiling */
       Bool     profileEnabled;
       Bool     fastMTFEnabled;
+      Bool     mtfProfileEnabled;
+      UInt32   profileMTFPositions[20];
+      UInt32   profileMTFTotalLo;
+      UInt32   profileMTFTotalHi;
       Int32    profileBlocks;
       double   profileBlockSortSeconds;
       double   profileMTFSeconds;
@@ -318,6 +327,9 @@ BZ2_compressBlockPrepare ( EState* );
 
 extern void
 BZ2_compressBlockEncode ( EState*, Bool );
+
+extern void
+BZ2_generateMTFValuesProfile ( EState* );
 
 extern void
 BZ2_bsInitWrite ( EState* );

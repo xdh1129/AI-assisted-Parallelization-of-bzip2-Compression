@@ -8,6 +8,7 @@ void* BZ2_cudaOverlapCreate ( void );
 Bool BZ2_cudaOverlapLaunch ( void* worker,
                              UInt32* ptr,
                              UChar* block,
+                             UChar* bwt,
                              Int32 nblock,
                              Int32 verbosity );
 

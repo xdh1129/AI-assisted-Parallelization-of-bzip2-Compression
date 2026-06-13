@@ -56,6 +56,33 @@ class CUDAOverlapSurfaceTest(unittest.TestCase):
         self.assertIn('generateMTFValuesReference', compress)
         self.assertIn('--compare-fast-mtf', benchmark)
 
+    def test_mtf_position_profile_is_runtime_opt_in(self):
+        private_header = self.read_text('bzlib_private.h')
+        bzlib = self.read_text('bzlib.c')
+        mtf_profile = self.read_text('mtf_profile.c')
+        self.assertIn('mtfProfileEnabled', private_header)
+        self.assertIn('profileMTFPositions', private_header)
+        self.assertIn('BZ2_MTF_PROFILE', bzlib)
+        self.assertIn('record_mtf_position', mtf_profile)
+
+    def test_cuda_can_return_bwt_last_column_for_sequential_mtf(self):
+        private_header = self.read_text('bzlib_private.h')
+        bzlib = self.read_text('bzlib.c')
+        blocksort = self.read_text('blocksort.c')
+        cuda_header = self.read_text('cuda/blocksort_cuda.h')
+        cuda_impl = self.read_text('cuda/blocksort_cuda.cu')
+        compress = self.read_text('compress.c')
+        benchmark = self.read_text('bench/cuda_profile_compare.py')
+
+        self.assertIn('BZ2_CUDA_BWT', bzlib)
+        self.assertIn('UChar*   bwt', private_header)
+        self.assertIn('blockIsBWT', private_header)
+        self.assertIn('bwt_last_column_kernel', cuda_impl)
+        self.assertIn('UChar* bwt', cuda_header)
+        self.assertIn('s->cudaBWTEnabled', blocksort)
+        self.assertIn('s->blockIsBWT', compress)
+        self.assertIn('--compare-cuda-bwt', benchmark)
+
 
 if __name__ == '__main__':
     unittest.main()

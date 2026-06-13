@@ -10,6 +10,7 @@ extern "C" {
 Bool BZ2_cudaBlockSort ( void** workspace,
                          UInt32* ptr,
                          UChar* block,
+                         UChar* bwt,
                          Int32 nblock,
                          Int32 verbosity );
 

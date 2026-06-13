@@ -33,7 +33,6 @@
 #include <sys/time.h>
 #endif
 
-
 /*---------------------------------------------------*/
 /*--- Bit stream I/O                              ---*/
 /*---------------------------------------------------*/
@@ -179,8 +178,12 @@ void generateMTFValuesReference ( EState* s )
    for (i = 0; i < s->nblock; i++) {
       UChar ll_i;
       AssertD ( wr <= i, "generateMTFValues(1)" );
-      j = ptr[i]-1; if (j < 0) j += s->nblock;
-      ll_i = s->unseqToSeq[block[j]];
+      if (s->blockIsBWT) {
+         ll_i = s->unseqToSeq[s->bwt[i]];
+      } else {
+         j = ptr[i]-1; if (j < 0) j += s->nblock;
+         ll_i = s->unseqToSeq[block[j]];
+      }
       AssertD ( ll_i < s->nInUse, "generateMTFValues(2a)" );
 
       if (yy[0] == ll_i) {
@@ -276,9 +279,13 @@ void generateMTFValuesFast ( EState* s )
       Int32 mtfPos;
 
       AssertD ( wr <= i, "generateMTFValuesFast(1)" );
-      ptr_i = ptr[i];
-      if (ptr_i == 0) ptr_i = (UInt32)s->nblock;
-      ll_i = s->unseqToSeq[block[ptr_i - 1]];
+      if (s->blockIsBWT) {
+         ll_i = s->unseqToSeq[s->bwt[i]];
+      } else {
+         ptr_i = ptr[i];
+         if (ptr_i == 0) ptr_i = (UInt32)s->nblock;
+         ll_i = s->unseqToSeq[block[ptr_i - 1]];
+      }
       AssertD ( ll_i < s->nInUse, "generateMTFValuesFast(2)" );
 
       if (yy[0] == ll_i) {
@@ -329,7 +336,9 @@ void generateMTFValuesFast ( EState* s )
 static
 void generateMTFValues ( EState* s )
 {
-   if (s->fastMTFEnabled)
+   if (s->mtfProfileEnabled)
+      BZ2_generateMTFValuesProfile ( s );
+   else if (s->fastMTFEnabled)
       generateMTFValuesFast ( s );
    else
       generateMTFValuesReference ( s );

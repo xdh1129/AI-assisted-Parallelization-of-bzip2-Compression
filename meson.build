@@ -79,7 +79,7 @@ if cc.has_function_attribute('visibility') or (cc.get_id() == 'clang' and host_m
   c_args += '-DBZ_EXTERN=__attribute__((__visibility__("default")))'
 endif
 
-bz_sources = ['blocksort.c', 'huffman.c', 'crctable.c', 'randtable.c', 'compress.c', 'decompress.c', 'bzlib.c']
+bz_sources = ['blocksort.c', 'huffman.c', 'crctable.c', 'randtable.c', 'compress.c', 'mtf_profile.c', 'decompress.c', 'bzlib.c']
 
 ## Library versioning
 ##

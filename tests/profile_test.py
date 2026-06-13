@@ -73,6 +73,23 @@ class CompressionProfileTest(unittest.TestCase):
         )
         self.assertEqual(restored, data)
 
+    def test_mtf_position_profile_reports_to_stderr(self):
+        sample = self.tmp / 'mtf-profile.bin'
+        sample.write_bytes(
+            bytes(range(256)) * 4096 +
+            b'mtf-position-profile-' * 32768
+        )
+        env = os.environ.copy()
+        env['BZ2_MTF_PROFILE'] = '1'
+        stdout, stderr = self.run_bzip2(
+            ['--compress', '-9', '--keep', '--stdout', str(sample)],
+            env=env,
+        )
+        self.assertTrue(stdout.startswith(b'BZh'))
+        self.assertIn('bzip2-mtf-profile: total=', stderr)
+        self.assertIn('pos0=', stderr)
+        self.assertIn('pos1_3=', stderr)
+
 
 if __name__ == '__main__':
     unittest.main()

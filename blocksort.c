@@ -1045,12 +1045,19 @@ void BZ2_blockSort ( EState* s )
    Int32   budgetInit;
    Int32   i;
 
+#if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
+   s->blockIsBWT = False;
+#endif
+
    if (nblock < 10000) {
       fallbackSort ( s->arr1, s->arr2, ftab, nblock, verb );
    } else {
 #if defined(BZ2_ENABLE_CUDA) && BZ2_ENABLE_CUDA
       if (BZ2_cudaBlockSort ( &(s->cudaBlockSortWorkspace),
-                              ptr, block, nblock, verb )) {
+                              ptr, block,
+                              s->cudaBWTEnabled ? s->bwt : NULL,
+                              nblock, verb )) {
+         s->blockIsBWT = (Bool)(s->cudaBWTEnabled && s->bwt != NULL);
          if (verb >= 3)
             VPrintf1 ( "      CUDA blocksort sorted %d rotations\n", nblock );
       } else

@@ -126,6 +126,39 @@ class CUDARoundtripTest(unittest.TestCase):
         )
         self.assertEqual(restored, data)
 
+    def test_cuda_bwt_output_matches_reference(self):
+        rng = random.Random(97531)
+        data = (
+            bytes(rng.getrandbits(8) for _ in range(2 * 1024 * 1024)) +
+            bytes(range(256)) * 4096 +
+            b'cuda-bwt-last-column-' * 65536
+        )
+        sample = self.path_tmp / 'cuda-bwt.bin'
+        sample.write_bytes(data)
+
+        reference_env = os.environ.copy()
+        reference_env['BZ2_DISABLE_CUDA'] = '1'
+        reference = self.run_bzip2(
+            ['--compress', '-9', '--keep', '--stdout', str(sample)],
+            env=reference_env,
+        )
+
+        bwt_env = os.environ.copy()
+        bwt_env['BZ2_CUDA_BWT'] = '1'
+        accelerated = self.run_bzip2(
+            ['--compress', '-9', '--keep', '--stdout', str(sample)],
+            env=bwt_env,
+        )
+        self.assertEqual(accelerated, reference)
+
+        compressed = self.path_tmp / 'cuda-bwt.bin.bz2'
+        compressed.write_bytes(accelerated)
+        restored = self.run_bzip2(
+            ['--decompress', '--stdout', str(compressed)],
+            env=bwt_env,
+        )
+        self.assertEqual(restored, data)
+
 
 if __name__ == '__main__':
     unittest.main()
