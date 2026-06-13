@@ -146,10 +146,10 @@ Performance improvements are quantified mathematically using the following stand
 \section{Results}
 
 \subsection{Benchmark Setup}
-We swept thread counts $\{1, 2, 4, 8, 16, 32\}$ (block size 900,000 bytes, compression level 9, 3 repeats per configuration) against a 1.08GB input (1,082,774,528 bytes), produced by concatenating the Canterbury Corpus reference file used in earlier, smaller-scale runs. Each AI-assisted stage was benchmarked in an isolated git worktree, and lbzip2 was benchmarked as an external reference using the same input and thread sweep.
+We swept thread counts $\{1, 2, 4, 8, 16, 32\}$ (block size 900KB, compression level 9, 3 repeats per configuration) against a 1.08GB input, produced by concatenating the Canterbury Corpus reference file used in earlier, smaller-scale runs. Each AI-assisted stage was benchmarked in an isolated git worktree, and lbzip2 was benchmarked as an external reference using the same input and thread sweep.
 
 \subsection{Correctness}
-All three AI-assisted stages produce \textbf{byte-identical compressed output} regardless of thread count: compression ratio is $0.233903$ and output size is $253,264,533$ bytes in every run. (lbzip2 produces a slightly different output size --- $253,270,191$ bytes, ratio $0.233908$ --- due to differences in block framing, not a correctness issue.) Round-trip decompression  against the original 1.08GB input passes  for all five parallel implementations (the three AI-assisted stages plus the lbzip2 and pbzip2 references) at every thread count tested. This confirms that increasing thread count does not change the compressed output or break correctness for any of the three AI-generated parallel versions.
+All three AI-assisted stages produce \textbf{byte-identical compressed output} regardless of thread count, while lbzip2 differs only slightly in output size due to its block framing --- not a correctness issue. Round-trip decompression against the original 1.08GB input passes for all five parallel implementations (the three AI-assisted stages plus the lbzip2 and pbzip2 references) at every thread count tested. This confirms that increasing thread count does not change the compressed output or break correctness for any of the three AI-generated parallel versions.
 
 \subsection{Runtime and Throughput}
 Table~\ref{tab:runtime} reports mean compression time (seconds, averaged over 3 repeats) at each thread count.
