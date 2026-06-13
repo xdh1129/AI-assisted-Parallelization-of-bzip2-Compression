@@ -171,3 +171,45 @@ These results update the expectations laid out in §5:
 * **Profiling-guided optimization (`stage3`) delivered the expected payoff**: starting from the verified `stage2` source, feeding back empirical bottleneck data (e.g., page-fault counts dropping from ~674K to ~181K after replacing per-block `malloc`/`free` with a per-thread bump-arena allocator) measurably reduced both the single-threaded baseline and the absolute runtime at every thread count, making it the fastest of the three AI stages overall and putting it on par with `lbzip2`.
 * **Existing tools remain a useful reference, but do not categorically outperform the AI-assisted versions** on this workload — `stage1` and `stage3` match or slightly exceed `lbzip2`'s absolute throughput at high thread counts, even though `lbzip2` is a mature, hand-optimized implementation. This is a notably positive result for the AI-assisted workflow: with appropriate guidance (and, in the case of `stage3`, profiling feedback), LLM-generated parallelization can reach performance parity with established tools on a representative compressible workload.
 * **Block size and thread count clearly affect speedup**, as expected — scaling is near-linear up to 16 threads and plateaus at 32, for all four implementations alike, pointing to a hardware/memory-bandwidth limit rather than an implementation-specific bottleneck at the high end.
+  
+ ### 6.6 Additional Research: GPU Acceleration Inside libbz2
+
+  After completing the main CPU-side parallelization study, we conducted an additional follow-up experiment on a separate bzip2-gpu branch to explore whether parts of the internal
+  libbz2 compression pipeline could be accelerated with CUDA. Unlike the main pbzx experiments, which focus on block-level parallelism across CPU threads, this extension targeted intra-
+  block acceleration inside the standard bzip2 compression path while preserving the .bz2 format and the public API.
+
+  The motivation for this follow-up came from profiling the original compression pipeline. In the CPU path, block sorting dominated total runtime, making it the most natural GPU target.
+  We therefore first offloaded BZ2_blockSort to CUDA. After this optimization, profiling showed that the bottleneck shifted away from sorting and toward the CPU-side generateMTFValues
+  and sendMTFValues stages. This made the GPU branch a useful case study in bottleneck migration: accelerating one dominant phase exposed new sequential limits in the remainder of the
+  algorithm.
+
+  We implemented three main GPU-oriented optimizations. First, the block sorting phase was offloaded to CUDA. Second, after sorting, the GPU was extended to directly generate the BWT
+  last column (BZ2_CUDA_BWT=1), allowing the subsequent MTF stage to read the transformed block sequentially rather than through the original random-access block[ptr[i]-1] pattern.
+  Third, we implemented a CUDA-assisted Huffman table optimization path (BZ2_CUDA_HUFFMAN=1) that parallelizes per-group code-cost evaluation and frequency accumulation, while leaving
+  final bitstream emission on the CPU in order to preserve the original .bz2 stream format.
+
+  Table 3 summarizes the 1 GB compression results. The CPU fallback required about 85.80s, with blocksort accounting for 60.97s (76.56%) of total internal phase time. Offloading
+  blocksort to CUDA reduced compression time to about 33.44s, confirming that block sorting is well suited to GPU acceleration. Enabling GPU-side BWT last-column generation further
+  reduced total compression time to about 29.95s, mainly by lowering MTF time from about 11.88s to 8.11s. Finally, enabling CUDA-assisted Huffman table optimization reduced total
+  compression time again to about 27.04s, with the huffman_bitstream phase decreasing from about 6.88s to 4.18s. Relative to the CPU fallback, this corresponds to roughly a 3.17x end-
+  to-end speedup.
+
+  Table 3 — GPU extension results on the 1 GB input
+
+ | Configuration| Compression time | Main bottleneck after optimization|
+ | ---:| ---:| ---:|
+ |CPU fallback |85.80s | CPU blocksort
+ |CUDA blocksort| 33.44s |CPU MTF + Huffman
+ |CUDA blocksort + BWT |29.95s| CPU MTF/Huffman
+ | CUDA blocksort + BWT + Huffman | 27.04s| MTF  becomes the primary remaining bottleneck
+
+  However, not all internal stages proved suitable for GPU acceleration. We also implemented an experimental CUDA MTF prototype that computed MTF ranks on the GPU while leaving zero-run
+  compaction on the CPU. Although this version preserved correctness, it performed very poorly in practice: on the same 1 GB input, total compression time increased to about 136.14s,
+  and the MTF phase alone rose to about 114.41s. This result reflects the fundamentally sequential nature of MTF: each symbol depends on the evolving recency ordering of earlier
+  symbols, so a naive parallel backward-scan formulation causes excessive repeated work and poor memory behavior on the GPU. For this reason, the CUDA MTF prototype was removed from the
+  final optimized path.
+
+  Overall, this additional study shows that GPU acceleration is effective for the highly parallel parts of bzip2, especially block sorting and some table-optimization work, but not for
+  all phases. Once sorting is accelerated, the bottleneck shifts to more sequential stages such as MTF and final encoding. Therefore, the main lesson from the GPU branch is not simply
+  that “GPU makes bzip2 faster,” but that selective acceleration works best when applied to phases with strong data parallelism, while inherently sequential transformations remain
+  difficult to accelerate efficiently on GPU hardware.
