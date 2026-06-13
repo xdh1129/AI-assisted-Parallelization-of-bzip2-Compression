@@ -148,7 +148,7 @@ Performance improvements are quantified mathematically using the following stand
 We swept thread counts $\{1, 2, 4, 8, 16, 32\}$ (block size 900,000 bytes, compression level 9, 3 repeats per configuration) against a 1.08GB input (1,082,774,528 bytes), produced by concatenating the Canterbury Corpus reference file used in earlier, smaller-scale runs. Each AI-assisted stage (\texttt{stage/1-naive}, \texttt{stage/2-constrained}, \texttt{stage/3-profiling}) was benchmarked in an isolated git worktree, and \texttt{lbzip2} was benchmarked as an external reference using the same input and thread sweep.
 
 \subsection{Correctness}
-All three AI-assisted stages produce \textbf{byte-identical compressed output} regardless of thread count: compression ratio is $0.233903$ and output size is $253,264,533$ bytes in every run. (\texttt{lbzip2} produces a slightly different output size --- $253,270,191$ bytes, ratio $0.233908$ --- due to differences in block framing, not a correctness issue.) Round-trip decompression (\texttt{bunzip2 | cmp}) against the original 1.08GB input passes (\texttt{PASS}) for all four implementations at every thread count tested. This confirms that increasing thread count does not change the compressed output or break correctness for any of the three AI-generated parallel versions.
+All three AI-assisted stages produce \textbf{byte-identical compressed output} regardless of thread count: compression ratio is $0.233903$ and output size is $253,264,533$ bytes in every run. (\texttt{lbzip2} produces a slightly different output size --- $253,270,191$ bytes, ratio $0.233908$ --- due to differences in block framing, not a correctness issue.) Round-trip decompression  against the original 1.08GB input passes  for all five parallel implementations (the three AI-assisted stages plus the \texttt{lbzip2} and \texttt{pbzip2} references) at every thread count tested. This confirms that increasing thread count does not change the compressed output or break correctness for any of the three AI-generated parallel versions.
 
 \subsection{Runtime and Throughput}
 Table~\ref{tab:runtime} reports mean compression time (seconds, averaged over 3 repeats) at each thread count.
@@ -157,33 +157,36 @@ Table~\ref{tab:runtime} reports mean compression time (seconds, averaged over 3 
 \caption{Mean compression time (s) on the 1.08GB input}
 \label{tab:runtime}
 \centering
-\begin{tabular}{ccccc}
+\setlength{\tabcolsep}{4pt}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{cccccc}
 \hline
-\textbf{Threads} & \shortstack{\textbf{Stage 1} \\ \textbf{(naive)}} & \shortstack{\textbf{Stage 2} \\ \textbf{(constrained)}} & \shortstack{\textbf{Stage 3} \\ \textbf{(profiling)}} & \shortstack{\textbf{lbzip2} \\ \textbf{(reference)}} \\ \hline
-1  & 80.84 & 81.77 & 78.72 & 67.90 \\
-2  & 40.63 & 40.62 & 39.43 & 34.51 \\
-4  & 20.80 & 20.74 & 20.02 & 17.58 \\
-8  & 10.53 & 10.50 & 10.23 & 9.10 \\
-16 & 5.52  & 5.50  & 5.36  & 4.96 \\
-32 & 3.06  & 3.49  & 3.03  & 3.14 \\ \hline
-\end{tabular}
+\textbf{Threads} & \shortstack{\textbf{Stage 1} \\ \textbf{(naive)}} & \shortstack{\textbf{Stage 2} \\ \textbf{(constrained)}} & \shortstack{\textbf{Stage 3} \\ \textbf{(profiling)}} & \shortstack{\textbf{lbzip2} \\ \textbf{(reference)}} & \shortstack{\textbf{pbzip2} \\ \textbf{(reference)}} \\ \hline
+1  & 80.84 & 81.77 & 78.72 & 67.90 & 81.13 \\
+2  & 40.63 & 40.62 & 39.43 & 34.51 & 41.33 \\
+4  & 20.80 & 20.74 & 20.02 & 17.58 & 20.89 \\
+8  & 10.53 & 10.50 & 10.23 & 9.10  & 10.75 \\
+16 & 5.52  & 5.50  & 5.36  & 4.96  & 5.89 \\
+32 & 3.06  & 3.49  & 3.03  & 3.14  & 3.79 \\ \hline
+\end{tabular}%
+}
 \end{table}
 
 \begin{figure}[htbp]
   \centering
   \includegraphics[width=\columnwidth]{./runtime_by_impl.png}
-  \caption{Compression time vs. thread count (log-log scale) for all four implementations on the 1.08GB input.}
+  \caption{Compression time vs. thread count (log-log scale) for all five parallel implementations and the sequential baseline on the 1.08GB input.}
   \label{fig:runtime}
 \end{figure}
 
-In absolute terms, \textbf{\texttt{stage3} (profiling-guided) is the fastest or tied-fastest of the three AI-assisted stages at every thread count}, and is competitive with --- even marginally faster than --- the mature \texttt{lbzip2} reference at high thread counts (3.03s vs. 3.14s at 32 threads). \texttt{stage2} (constraint-guided) is consistently the slowest of the three AI stages in absolute time, despite having a similar relative speedup curve (see Section~\ref{sub:speedup}); its higher single-threaded baseline (81.77s) and pthread-pipeline synchronization overhead carry through at every thread count.
+In absolute terms, \textbf{\texttt{stage3} (profiling-guided) is the fastest of the three AI-assisted stages at every thread count}, and is competitive with --- even marginally faster than --- the mature \texttt{lbzip2} reference at high thread counts (3.03s vs. 3.14s at 32 threads). \texttt{stage1} (naive) and \texttt{stage2} (constraint-guided) are otherwise nearly indistinguishable through the middle of the sweep, differing by only hundredths of a second at 2--16 threads. \texttt{stage2}'s disadvantage is instead concentrated at the two ends of the sweep: it has the highest single-threaded baseline of the three (81.77s), and it scales worst at 32 threads (3.49s, versus 3.03--3.06s for \texttt{stage1} and \texttt{stage3}), where its pthread-pipeline synchronization overhead becomes most visible (see Section~\ref{sub:speedup}). The second external reference, \texttt{pbzip2}, tracks the AI stages closely through 8 threads but falls behind from 16 threads onward, ending as the slowest implementation at 32 threads (3.79s); like \texttt{stage2}, its hand-built pthread pipeline pays a visible synchronization cost once the thread count reaches the physical-core count.
 
-Figure~\ref{fig:throughput} shows the corresponding throughput curves, which mirror the runtime results (throughput is simply $\mathit{Input\_Size} / T_{\text{compression}}$): all four implementations reach roughly 330--360~MB/s at 32 threads, up from approximately 13--16~MB/s single-threaded.
+Figure~\ref{fig:throughput} shows the corresponding throughput curves, which mirror the runtime results (throughput is simply $\mathit{Input\_Size} / T_{\text{compression}}$): all five parallel implementations reach roughly 285--360~MB/s at 32 threads (\texttt{stage3} highest at $\approx$359~MB/s, \texttt{pbzip2} lowest at $\approx$286~MB/s), up from approximately 13--16~MB/s single-threaded.
 
 \begin{figure}[htbp]
   \centering
   \includegraphics[width=\columnwidth]{throughput_by_impl.png}
-  \caption{Throughput (MB/s) vs. thread count for all four implementations on the 1.08GB input.}
+  \caption{Throughput (MB/s) vs. thread count for all five parallel implementations and the sequential baseline on the 1.08GB input.}
   \label{fig:throughput}
 \end{figure}
 
@@ -195,16 +198,19 @@ Table~\ref{tab:speedup} reports speedup relative to each implementation's own si
 \caption{Speedup relative to each implementation's own 1-thread baseline}
 \label{tab:speedup}
 \centering
-\begin{tabular}{ccccc}
+\setlength{\tabcolsep}{4pt}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{cccccc}
 \hline
-\textbf{Threads} & \shortstack{\textbf{Stage 1} \\ \textbf{(naive)}} & \shortstack{\textbf{Stage 2} \\ \textbf{(constrained)}} & \shortstack{\textbf{Stage 3} \\ \textbf{(profiling)}} & \shortstack{\textbf{lbzip2} \\ \textbf{(reference)}} \\ \hline
-1  & 1.00$\times$  & 1.00$\times$  & 1.00$\times$  & 1.00$\times$ \\
-2  & 1.99$\times$  & 2.01$\times$  & 2.00$\times$  & 1.97$\times$ \\
-4  & 3.89$\times$  & 3.94$\times$  & 3.93$\times$  & 3.86$\times$ \\
-8  & 7.68$\times$  & 7.79$\times$  & 7.69$\times$  & 7.46$\times$ \\
-16 & 14.64$\times$ & 14.87$\times$ & 14.69$\times$ & 13.69$\times$ \\
-32 & 26.44$\times$ & 23.43$\times$ & 25.95$\times$ & 21.64$\times$ \\ \hline
-\end{tabular}
+\textbf{Threads} & \shortstack{\textbf{Stage 1} \\ \textbf{(naive)}} & \shortstack{\textbf{Stage 2} \\ \textbf{(constrained)}} & \shortstack{\textbf{Stage 3} \\ \textbf{(profiling)}} & \shortstack{\textbf{lbzip2} \\ \textbf{(reference)}} & \shortstack{\textbf{pbzip2} \\ \textbf{(reference)}} \\ \hline
+1  & 1.00$\times$  & 1.00$\times$  & 1.00$\times$  & 1.00$\times$  & 1.00$\times$ \\
+2  & 1.99$\times$  & 2.01$\times$  & 2.00$\times$  & 1.97$\times$  & 1.96$\times$ \\
+4  & 3.89$\times$  & 3.94$\times$  & 3.93$\times$  & 3.86$\times$  & 3.88$\times$ \\
+8  & 7.68$\times$  & 7.79$\times$  & 7.69$\times$  & 7.46$\times$  & 7.54$\times$ \\
+16 & 14.64$\times$ & 14.87$\times$ & 14.69$\times$ & 13.69$\times$ & 13.77$\times$ \\
+32 & 26.44$\times$ & 23.43$\times$ & 25.95$\times$ & 21.64$\times$ & 21.41$\times$ \\ \hline
+\end{tabular}%
+}
 \end{table}
 
 \begin{figure}[htbp]
@@ -214,9 +220,9 @@ Table~\ref{tab:speedup} reports speedup relative to each implementation's own si
   \label{fig:speedup}
 \end{figure}
 
-All three AI-assisted stages --- and \texttt{lbzip2} --- track the ideal linear-speedup line closely up to 16 threads (within $\sim$5\% of ideal at every step: $\sim$2$\times$, $\sim$4$\times$, $\sim$8$\times$, $\sim$15$\times$), confirming that block-level parallelism is, as expected, embarrassingly parallel for a sufficiently large input (1,204 blocks at 900~KB each leaves ample work to keep 16 threads fed). Scaling tapers off at 32 threads for every implementation, plateauing around 22--26$\times$ --- consistent with the profiling-stage finding that performance becomes limited by block granularity and BWT memory bandwidth rather than by software-level synchronization, once thread count approaches or exceeds the number of physical cores.
+All three AI-assisted stages --- along with both external references (\texttt{lbzip2} and \texttt{pbzip2}) --- track the ideal linear-speedup line closely up to 16 threads ($\sim$2$\times$, $\sim$4$\times$, $\sim$8$\times$, and $\sim$14--15$\times$ at each doubling), confirming that block-level parallelism is, as expected, embarrassingly parallel for a sufficiently large input (1,204 blocks at 900~KB each leaves ample work to keep 16 threads fed). Scaling tapers off at 32 threads for every implementation, plateauing around 21--26$\times$ --- consistent with the profiling-stage finding that performance becomes limited by block granularity and BWT memory bandwidth rather than by software-level synchronization, once thread count approaches or exceeds the number of physical cores.
 
-Note that \texttt{lbzip2}'s \textit{relative} speedup is the lowest of the four (21.64$\times$ at 32 threads) purely because its single-threaded baseline is already the fastest (67.90s vs. 78--82s for the AI stages) --- it has comparatively less headroom to climb. In \textbf{absolute} terms (Table~\ref{tab:runtime}, Figure~\ref{fig:runtime}), \texttt{lbzip2} remains competitive with, but does not dominate, the AI-assisted stages: \texttt{stage1} and \texttt{stage3} match or marginally beat it at 32 threads.
+Note that the two external references post the \textit{lowest} relative speedups at 32 threads (\texttt{pbzip2} 21.41$\times$, \texttt{lbzip2} 21.64$\times$), but for different reasons. \texttt{lbzip2}'s is low purely because its single-threaded baseline is already the fastest of all (67.90s vs. 78--82s for the AI stages) --- it has comparatively less headroom to climb. \texttt{pbzip2}, by contrast, starts from one of the slowest single-threaded baselines (81.13s) yet still scales the worst in absolute terms, so its low relative speedup reflects a genuine efficiency loss rather than a fast starting point. In \textbf{absolute} terms (Table~\ref{tab:runtime}, Figure~\ref{fig:runtime}), \texttt{lbzip2} remains competitive with, but does not dominate, the AI-assisted stages: \texttt{stage1} and \texttt{stage3} match or marginally beat it at 32 threads, while \texttt{pbzip2} is the slowest implementation at that point (3.79s).
 
 \section{Discussion and Analysis}
 % This section carries a lot of weight. Depth of analysis is graded heavily.
@@ -237,10 +243,9 @@ Constraint-guided prompting (\texttt{stage2}) did not yield a clear runtime adva
 Profiling-guided optimization (\texttt{stage3}) delivered the expected payoff. Starting from the verified \texttt{stage2} source, feeding back empirical bottleneck data (e.g., page-fault counts dropping from $\sim$674K to $\sim$181K after replacing per-block \texttt{malloc}/\texttt{free} with a per-thread bump-arena allocator) measurably reduced both the single-threaded baseline and the absolute runtime at every thread count. This direct system feedback was critical to making it the fastest of the three AI stages overall and putting it on par with \texttt{lbzip2}.
 
 \subsection{Limitations}
-Block size and thread count clearly affect speedup, as expected. Scaling is near-linear up to 16 threads and plateaus at 32 for all four implementations alike. This points to a hardware limit --- specifically, memory bandwidth saturation during the Burrows-Wheeler Transform (BWT) phase --- rather than an implementation-specific software bottleneck at the high end.
+Block size and thread count clearly affect speedup, as expected. Scaling is near-linear up to 16 threads and plateaus at 32 for all five parallel implementations alike. This points to a hardware limit --- specifically, memory bandwidth saturation during the Burrows-Wheeler Transform (BWT) phase --- rather than an implementation-specific software bottleneck at the high end.
 
-%------------------------------------------------------------------------------
-\section{Additional Study: GPU Acceleration Inside libbz2}
+\subsection{Additional Study: GPU Acceleration Inside libbz2}
 Beyond the CPU-side, block-level parallelization studied above, we conducted a follow-up experiment on a separate GPU branch to assess whether the \emph{intra-block} stages of the standard \texttt{libbz2} compression path could be offloaded to CUDA while preserving both the \texttt{.bz2} format and the public API.
 
 Profiling the single-threaded path showed that block sorting dominated runtime, making it the natural first GPU target. We implemented three optimizations: (i) offloading \texttt{BZ2\_blockSort} to CUDA; (ii) generating the BWT last column directly on the GPU (\texttt{BZ2\_CUDA\_BWT}), so the subsequent MTF stage reads the transformed block sequentially rather than through the random-access \texttt{block[ptr[i]-1]} pattern; and (iii) a CUDA-assisted Huffman table optimization (\texttt{BZ2\_CUDA\_HUFFMAN}) that parallelizes per-group code-cost evaluation and frequency accumulation, while leaving final bitstream emission on the CPU to preserve the stream format.
