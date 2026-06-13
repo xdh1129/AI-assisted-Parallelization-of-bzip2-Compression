@@ -70,9 +70,9 @@ Data compression, bzip2, parallel programming, LLM code generation, AI-assisted 
 
 \vspace{0.5em}
 \noindent\fbox{\parbox{0.97\columnwidth}{\textbf{Project Category:}\quad
-$\square$~\textbf{A} (Self-chosen topic)\qquad
-$\boxtimes$~\textbf{B} (AI-agent code optimization)\\[2pt]
-\footnotesize Tick exactly one. This tells reviewers which lens to apply.}}
+$\boxtimes$~\textbf{A} (Self-chosen topic)\qquad
+$\square$~\textbf{B} (AI-agent code optimization)
+}}
 
 %------------------------------------------------------------------------------
 \section{Introduction}
@@ -145,7 +145,7 @@ Performance improvements are quantified mathematically using the following stand
 \section{Results}
 
 \subsection{Benchmark Setup}
-We swept thread counts $\{1, 2, 4, 8, 16, 32\}$ (block size 900,000 bytes, compression level 9, 3 repeats per configuration) against a 1.08GB input (1,082,774,528 bytes), produced by concatenating the Canterbury Corpus reference file used in earlier, smaller-scale runs. Each AI-assisted stage (\texttt{stage/1-naive}, \texttt{stage/2-constrained}, \texttt{stage/3-profiling}) was benchmarked in an isolated git worktree, and \texttt{lbzip2} was benchmarked as an external reference using the same input and thread sweep. Raw results are committed as \texttt{results/stageN\_results\_1gb.csv} on each respective branch and \texttt{experiments/lbzip2/results/lbzip2\_results\_1gb.csv} on \texttt{main}; the merged comparison data and figures referenced below are under \texttt{experiments/comparison/}.
+We swept thread counts $\{1, 2, 4, 8, 16, 32\}$ (block size 900,000 bytes, compression level 9, 3 repeats per configuration) against a 1.08GB input (1,082,774,528 bytes), produced by concatenating the Canterbury Corpus reference file used in earlier, smaller-scale runs. Each AI-assisted stage (\texttt{stage/1-naive}, \texttt{stage/2-constrained}, \texttt{stage/3-profiling}) was benchmarked in an isolated git worktree, and \texttt{lbzip2} was benchmarked as an external reference using the same input and thread sweep.
 
 \subsection{Correctness}
 All three AI-assisted stages produce \textbf{byte-identical compressed output} regardless of thread count: compression ratio is $0.233903$ and output size is $253,264,533$ bytes in every run. (\texttt{lbzip2} produces a slightly different output size --- $253,270,191$ bytes, ratio $0.233908$ --- due to differences in block framing, not a correctness issue.) Round-trip decompression (\texttt{bunzip2 | cmp}) against the original 1.08GB input passes (\texttt{PASS}) for all four implementations at every thread count tested. This confirms that increasing thread count does not change the compressed output or break correctness for any of the three AI-generated parallel versions.
