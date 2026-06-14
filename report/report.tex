@@ -270,20 +270,7 @@ Contrary to the concern that naive AI prompting may produce incomplete or unsafe
 
 \subsection{Root-Cause Analysis of AI Failures (Stage 2)}
 \label{subsec:stage2-rootcause}
-Constraint-guided prompting (Stage 2) produced correct but consistently slower code. Even under a fair elapsed-time comparison (excluding our timing instrumentation), Stage 2 is genuinely $\sim$9--12\% slower than Stage 1 and Stage 3 at 32 threads, and --- more tellingly --- its run-to-run variance is far larger (Table~\ref{tab:stage2var}).
-
-\begin{table}[htbp]
-\caption{Elapsed time across 7 reruns at 32 threads}
-\label{tab:stage2var}
-\centering
-\begin{tabular}{lcc}
-\hline
-\textbf{Stage} & \textbf{Elapsed range (7 runs)} & \textbf{Spread} \\ \hline
-Stage 1 & 5.96--6.63\,s & $\sim$11\% \\
-Stage 2 & 6.18--7.67\,s & \textbf{$\sim$24\%} \\
-Stage 3 & 5.86--6.33\,s & $\sim$8\% \\ \hline
-\end{tabular}
-\end{table}
+Constraint-guided prompting (Stage 2) produced correct but consistently slower code. Even under a fair elapsed-time comparison (excluding our timing instrumentation), Stage 2 is genuinely $\sim$9--12\% slower than Stage 1 and Stage 3 at 32 threads, and --- more tellingly --- its run-to-run variance is far larger.
 
 \textbf{Ruling out the obvious suspects.} Our instrumentation (\texttt{prof\_lock}) showed that userspace \texttt{pthread\_mutex} contention (the queue lock \texttt{p->mtx}) and worker idle time were \emph{not} the cause --- both are comparable across the three stages. The only remaining synchronization point that \texttt{prof\_lock} cannot observe, yet is provably present, lies in the kernel: glibc's \texttt{malloc} services any allocation above its 128\,KB threshold with \texttt{mmap}/\texttt{munmap}, and every \texttt{mmap}/\texttt{munmap} must hold the process-wide kernel \texttt{mmap\_lock} (a reader/writer semaphore). This is the same mechanism behind the $\sim$674K page-faults and the \texttt{madvise}/\texttt{munmap}/\texttt{mmap}-dominated \texttt{strace} that motivated Stage 3's arena allocator.
 
@@ -338,8 +325,11 @@ These results suggest that AI-assisted performance optimization is most effectiv
 
 %------------------------------------------------------------------------------
 \begin{thebibliography}{00}
-\bibitem{ref_bzip2wiki}
-``Bzip2,'' \emph{Wikipedia}. [Online]. Available: \url{https://zh.wikipedia.org/zh-tw/Bzip2}. [Accessed: Jun.~13, 2026].
+\bibitem{ref_bzip2org}
+``bzip2 and libbzip2.'' [Online]. Available: \url{http://www.bzip.org/}. [Accessed: Jun.~13, 2026].
+
+\bibitem{ref_bwt}
+M.~Burrows and D.~J. Wheeler, ``A block-sorting lossless data compression algorithm,'' Digital Equipment Corporation, Systems Research Center, Palo Alto, CA, USA, Tech. Rep.~124, May 1994.
 
 \bibitem{ref_pbzip2}
 ``pbzip2,'' \emph{Compression}. [Online]. Available: \url{https://compression.great-site.net/pbzip2/?i=1}. [Accessed: Jun.~13, 2026].
