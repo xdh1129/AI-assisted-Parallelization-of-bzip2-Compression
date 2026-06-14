@@ -298,7 +298,7 @@ CPU fallback                & 85.80 & CPU block sort \\
 
 Not all stages benefited. An experimental CUDA MTF prototype, which computed MTF ranks on the GPU while leaving zero-run compaction on the CPU, preserved correctness but degraded performance severely: total time rose to 136.14\,s, with the MTF phase alone reaching 114.41\,s. This reflects the inherently sequential nature of MTF---each symbol depends on the evolving recency ordering of earlier symbols---so a naive parallel backward-scan incurs excessive repeated work and poor memory behavior on the GPU. The prototype was therefore removed from the final path.
 
-The broader lesson mirrors the CPU study: selective acceleration is most effective when applied to phases with strong data parallelism (block sorting, table optimization), whereas accelerating one dominant phase merely migrates the bottleneck to the next, inherently sequential stage (here, MTF and final encoding), which resists efficient GPU implementation.
+The broader lesson mirrors the CPU study: selective acceleration is most effective when applied to phases with strong data parallelism (block sorting, table optimization), whereas accelerating one dominant phase merely migrates the bottleneck to the next, inherently sequential stage (here, MTF and final encoding), which resists efficient GPU implementation. Detailed hardware specifications, methodology, and extended performance results for this GPU study are provided in Appendix~\ref{app:gpu}.
 
 %------------------------------------------------------------------------------
 \section{Conclusion}
@@ -624,5 +624,21 @@ flags). These changes are described in detail in Section~IV-B.
 
 \section{Changes Made to the Agent}
 The Claude Code agent was provided isolated Git worktrees and varying levels of command permissions via per-branch CLAUDE.md files. In Stage 2, it was granted permissions to run machine-discovery commands (lscpu, free, nproc). In Stage 3, the agent context was dynamically updated to include raw outputs from \texttt{perf stat} and \texttt{/usr/bin/time -v}, granting it full visibility into its own execution bottlenecks.
+
+\section{GPU Acceleration: Experimental Setup and Extended Results}
+\label{app:gpu}
+This appendix details the hardware environment and extended results for the side-study on CUDA-based GPU acceleration discussed in Section VI-D.
+
+\subsection{Hardware and Software Specifications}
+The GPU offloading experiments were conducted on a dedicated SLURM-managed compute node equipped with the following hardware and software stack:
+\begin{itemize}
+    \item \textbf{GPU:} NVIDIA Tesla V100 (SXM2 form factor) with 32GB HBM2 VRAM.
+    \item \textbf{Host CPU:} Dual-socket Intel Xeon Gold 6154 @ 3.00 GHz (36 physical cores total, Hyper-Threading disabled).
+    \item \textbf{Host Memory:} 754 GiB System RAM.
+    \item \textbf{Software Stack:} NVIDIA Driver Version 535.161.08, CUDA Environment 12.2.
+\end{itemize}
+
+\subsection{Extended Results}
+The CPU fallback required 85.80\,s on the 1\,GB input, of which block sorting accounted for 60.97\,s (76.6\%). Offloading sorting to CUDA cut total time to 33.44\,s; GPU-side BWT generation further reduced it to 29.95\,s (MTF: 11.88\,s\,$\rightarrow$\,8.11\,s); and CUDA-assisted Huffman optimization brought it to 27.04\,s (bitstream phase: 6.88\,s\,$\rightarrow$\,4.18\,s), achieving a $3.17\times$ end-to-end speedup over the fallback.
 
 \end{document}
