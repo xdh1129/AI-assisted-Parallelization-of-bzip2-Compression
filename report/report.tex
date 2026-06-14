@@ -261,9 +261,26 @@ Contrary to the concern that naive AI prompting may produce incomplete or unsafe
 
 \subsection{Root-Cause Analysis of AI Failures (Stage 2)}
 \label{subsec:stage2-rootcause}
-Constraint-guided prompting (Stage 2) did not yield a clear runtime advantage over the naive version --- if anything, its \texttt{pthread}-pipeline design carries more baseline overhead, resulting in the highest single-threaded time (81.77s).
+Constraint-guided prompting (Stage 2) produced correct but consistently slower code. Even under a fair elapsed-time comparison (excluding our timing instrumentation), Stage 2 is genuinely $\sim$9--12\% slower than Stage 1 and Stage 3 at 32 threads, and --- more tellingly --- its run-to-run variance is far larger (Table~\ref{tab:stage2var}).
 
-\textbf{Root Cause:} The constraints provided in the prompt had a bifurcated effect. While the AI successfully executed system commands (\texttt{lscpu}, \texttt{free}) to discover the 72-core dual-socket topology and memory limits, it failed to translate this hardware-awareness into a performant design. Instead, the AI fixated on fulfilling the strict \emph{structural} constraints (mandating unique block IDs, a separate writer thread, and strict output ordering). By over-indexing on these architectural rules, it forced the program into a heavy \texttt{pthread}-pipeline synchronization design. This inadvertently introduced excessive lock contention and high per-block \texttt{malloc}/\texttt{free} overhead. This demonstrates a critical LLM behavioral flaw: when presented with both static hardware realities and explicit structural rules, the AI prioritized fulfilling the complex structural directives over writing code actually tailored to the hardware it had just discovered.
+\begin{table}[htbp]
+\caption{Elapsed time across 7 reruns at 32 threads}
+\label{tab:stage2var}
+\centering
+\begin{tabular}{lcc}
+\hline
+\textbf{Stage} & \textbf{Elapsed range (7 runs)} & \textbf{Spread} \\ \hline
+Stage 1 & 5.96--6.63\,s & $\sim$11\% \\
+Stage 2 & 6.18--7.67\,s & \textbf{$\sim$24\%} \\
+Stage 3 & 5.86--6.33\,s & $\sim$8\% \\ \hline
+\end{tabular}
+\end{table}
+
+\textbf{Ruling out the obvious suspects.} Our instrumentation (\texttt{prof\_lock}) showed that userspace \texttt{pthread\_mutex} contention (the queue lock \texttt{p->mtx}) and worker idle time were \emph{not} the cause --- both are comparable across the three stages. The only remaining synchronization point that \texttt{prof\_lock} cannot observe, yet is provably present, lies in the kernel: glibc's \texttt{malloc} services any allocation above its 128\,KB threshold with \texttt{mmap}/\texttt{munmap}, and every \texttt{mmap}/\texttt{munmap} must hold the process-wide kernel \texttt{mmap\_lock} (a reader/writer semaphore). This is the same mechanism behind the $\sim$674K page-faults and the \texttt{madvise}/\texttt{munmap}/\texttt{mmap}-dominated \texttt{strace} that motivated Stage 3's arena allocator.
+
+\textbf{Why Stage 2 specifically.} Both the reader's 900\,KB raw-block buffers and each worker's $\sim$7.6\,MB BWT workspace exceed the 128\,KB threshold, so all of them route through \texttt{mmap}/\texttt{munmap}. In Stage 1 and Stage 3, only the 32 worker threads perform these large allocations inside the timed region (and Stage 3's per-thread arena removes them almost entirely). Stage 2's mandated pipeline adds \emph{two} more threads that allocate and free continuously for the whole run: the reader \texttt{malloc}/\texttt{free}s 900\,KB raw buffers and the writer frees compressed-output buffers. These two threads contend for the same kernel \texttt{mmap\_lock} as all 32 workers throughout execution, serializing memory operations and producing the jitter we observe as Stage 2's outsized variance.
+
+\textbf{The AI's failure.} The agent faithfully implemented the prompt's structural mandate --- dedicated reader and writer threads for ordered output --- but could not foresee that these extra allocation sites would collide on a kernel lock invisible to userspace profiling. Over-constraining the architecture without performance feedback thus yielded a design that is correct and well-structured yet systematically slower and less predictable than the minimally-guided Stage 1.
 
 \subsection{Success of Profiling Feedback}
 Profiling-guided optimization (Stage 3) delivered the expected payoff. Built from the same sequential baseline as the other stages, but with profiling tools made available to the agent, it used empirical bottleneck data to drive targeted fixes --- for example, replacing per-block \texttt{malloc}/\texttt{free} with a per-thread bump-arena allocator dropped page-fault counts from $\sim$674K to $\sim$181K --- measurably reducing both the single-threaded baseline and the absolute runtime at every thread count. This direct system feedback was critical to making it the fastest of the three AI stages overall and putting it on par with lbzip2.
@@ -495,7 +512,7 @@ Output must be valid bzip2: bunzip2 -c output.bz2 | cmp - input.bin must succeed
 --threads 1 must behave identically to the original sequential code.
 \end{lstlisting}
 
-\subsection*{Stage 2 --- Constraint-guided (branch \texttt{stage/2-constrained})}
+\subsection*{Stage 2 --- Constraint-guided\\(branch \texttt{stage/2-constrained})}
 
 \begin{lstlisting}
 # pbzx Stage 2: Constraint-guided AI Parallelization
@@ -611,16 +628,18 @@ You have full permission to run any of these on ./pbzx at any time:
 
 \section{Representative Agent Output}
 
-The complete agent interaction---tool calls, extended thinking blocks, and
-generated code---is preserved in the Git history of the
-\texttt{stage/3-profiling} branch.
-The primary files produced or modified by the Stage~3 agent are
-\texttt{src/main.c} (OpenMP parallel loop with per-thread arena allocator),
-the new files \texttt{src/arena.c} and \texttt{src/arena.h} (bump-pointer
-memory arena that eliminated per-block \texttt{malloc}/\texttt{free}
-overhead, reducing page-fault counts from $\sim$674K to $\sim$181K), and
-\texttt{Makefile} (updated \texttt{CFLAGS} for OpenMP and optimization
-flags). These changes are described in detail in Section~IV-B.
+The complete agent interaction for each stage---including the prompts, the
+agent's extended thinking, tool calls, and generated code---is preserved
+verbatim as a \texttt{chat-history.txt} file on the corresponding Git branch:
+
+\begin{itemize}
+  \item \textbf{Stage 1 (naive):}\\
+  \url{https://github.com/xdh1129/AI-assisted-Parallelization-of-bzip2-Compression/blob/stage/1-naive/chat-history.txt}
+  \item \textbf{Stage 2 (constrained):}\\
+  \url{https://github.com/xdh1129/AI-assisted-Parallelization-of-bzip2-Compression/blob/stage/2-constrained/chat-history.txt}
+  \item \textbf{Stage 3 (profiling):}\\
+  \url{https://github.com/xdh1129/AI-assisted-Parallelization-of-bzip2-Compression/blob/stage/3-profiling/chat-history.txt}
+\end{itemize}
 
 \section{Changes Made to the Agent}
 The Claude Code agent was provided isolated Git worktrees and varying levels of command permissions via per-branch CLAUDE.md files. In Stage 2, it was granted permissions to run machine-discovery commands (lscpu, free, nproc). In Stage 3, the agent context was dynamically updated to include raw outputs from \texttt{perf stat} and \texttt{/usr/bin/time -v}, granting it full visibility into its own execution bottlenecks.
