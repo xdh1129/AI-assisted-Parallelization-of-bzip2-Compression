@@ -322,29 +322,301 @@ K.~J. Nesbitt, ``lbzip2: Parallel bzip2 utility,'' GitHub repository. [Online]. 
 \xdef\mainbodyendpage{\thepage}
 
 %==============================================================================
-%  APPENDIX -- REQUIRED RAW MATERIALS
-%  Category B: this appendix is REQUIRED. Include the verbatim input prompt,
-%  system prompt, representative agent output, and the changes you made to the
-%  agent. If the material is very long, include representative excerpts here and
-%  link to a repository for the complete set.
-%  Category A: optional (use for extra data, full tables, etc.).
+%  APPENDIX -- RAW MATERIALS
 %==============================================================================
 \appendices
 
-\section{Input Prompt}
+\section{Claude CLI Prompt Architecture}
+\label{app:prompt-arch}
+
+When Claude Code submits a request to the Anthropic Messages API, the payload
+is assembled from several distinct layers injected by the harness.
+The following annotated structure was derived from an intercepted first-turn
+API call during Stage~3 development.
+
+\textbf{System prompt (\texttt{system} array).}
+Four \texttt{text} blocks are passed in the top-level \texttt{system} field.
+(1)~A billing and telemetry header, not cached.
+(2)~The agent identity declaration (\textit{"You are Claude Code, Anthropic's
+official CLI for Claude."}), not cached.
+(3)~The core operational instructions---tool descriptions, permission model,
+response-style rules, and session guidance---marked
+\texttt{cache\_control: \{type: "ephemeral", scope: "global", ttl: "1h"\}};
+the \texttt{scope: "global"} flag allows this block's KV cache to be shared
+across all Claude Code sessions globally, substantially reducing per-request
+latency and cost.
+(4)~Session-specific context (auto-memory system instructions, current git
+status, environment facts, available skills), marked
+\texttt{cache\_control: \{type: "ephemeral", ttl: "1h"\}} (session-scoped).
+
+\textbf{CLAUDE.md and auto-memory injected into the user turn.}
+The project's \texttt{CLAUDE.md} and the per-project memory index
+(\texttt{MEMORY.md}) are \emph{not} placed in the system prompt.
+Instead, Claude Code prepends them to the first user message as a separate
+\texttt{text} content item wrapped in a \texttt{<system-reminder>} XML tag.
+The actual user message appears as a second content item and carries its own
+\texttt{cache\_control} annotation so subsequent turns reuse its cached
+representation.
+
+\textbf{Hook output as a \texttt{role: "system"} turn.}
+A SessionStart hook fires before the first model turn; its output (the skills
+manifest, deferred-tool registry, and available agent types) is injected as
+a second entry in the \texttt{messages} array with \texttt{role: "system"}.
+This is a Claude Code harness extension: the standard Anthropic Messages API
+does not define a \texttt{"system"} role inside the \texttt{messages} array;
+Claude Code uses it to inject harness-side context between turns without
+attributing it to the user.
+
+\textbf{Tools, extended thinking, and context management.}
+All tool definitions (Agent, Bash, Edit, Read, Write, Skill, ToolSearch,
+AskUserQuestion, ScheduleWakeup) are transmitted as full JSON Schemas on every
+request and are not cached.
+Extended chain-of-thought reasoning is enabled via
+\texttt{"thinking": \{"type": "adaptive"\}} and
+\texttt{"output\_config": \{"effort": "high"\}}.
+A \texttt{context\_management} edit of type
+\texttt{clear\_thinking\_20251015} strips completed thinking blocks from prior
+turns, reclaiming context-window space while preserving all final assistant
+responses.
+
+The condensed, annotated payload structure is shown below.
+
 \begin{lstlisting}
-[Paste your input prompt here verbatim.]
+{
+  "model": "claude-opus-4-8",
+  "system": [
+    /* 1: billing/telemetry header -- not cached */
+    { "type": "text",
+      "text": "x-anthropic-billing-header: cc_version=...; cc_entrypoint=cli;" },
+    /* 2: agent identity -- not cached */
+    { "type": "text",
+      "text": "You are Claude Code, Anthropic's official CLI for Claude." },
+    /* 3: core instructions -- globally cached across all sessions, 1h TTL */
+    { "type": "text",
+      "text": "<tools, permissions, style rules, response guidelines ...>",
+      "cache_control": { "type": "ephemeral", "scope": "global", "ttl": "1h" } },
+    /* 4: session context -- session-scoped cache, 1h TTL */
+    { "type": "text",
+      "text": "<git status, environment, auto-memory instructions, skills>",
+      "cache_control": { "type": "ephemeral", "ttl": "1h" } }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        /* CLAUDE.md + MEMORY.md prepended before the user's actual message */
+        { "type": "text",
+          "text": "<system-reminder>\n# claudeMd\n[CLAUDE.md contents]\n\n# memory\n[MEMORY.md index]\n</system-reminder>\n" },
+        /* actual user input -- cached so later turns reuse this KV entry */
+        { "type": "text",
+          "text": "hi test 123",
+          "cache_control": { "type": "ephemeral", "ttl": "1h" } }
+      ]
+    },
+    /* SessionStart hook output -- injected as a non-standard "system" role */
+    {
+      "role": "system",
+      "content": "<skills manifest, deferred tools, available agent types>"
+    }
+  ],
+  "tools": [ /* full JSON Schema for each tool -- re-sent every request */ ],
+  "thinking":           { "type": "adaptive" },
+  "output_config":      { "effort": "high"   },
+  "context_management": {
+    "edits": [{ "type": "clear_thinking_20251015", "keep": "all" }]
+  },
+  "max_tokens": 64000,
+  "stream": true
+}
 \end{lstlisting}
 
-\section{System Prompt}
+\section{Task Prompts (CLAUDE.md per Stage)}
+
+Each stage branch carried its own \texttt{CLAUDE.md}, injected into every API
+request via the \texttt{<system-reminder>} mechanism described in
+Appendix~\ref{app:prompt-arch}.
+The three files illustrate the deliberate escalation of guidance across stages:
+Stage~1 is a minimal open-ended directive; Stage~2 adds explicit structural
+constraints and a hardware-discovery mandate; Stage~3 replaces the structural
+mandates with a profiling-tool allowlist and an iterative
+profile\,$\to$\,optimize\,$\to$\,verify loop instruction.
+
+\subsection*{Stage 1 --- Naive (branch \texttt{stage/1-naive})}
+
 \begin{lstlisting}
-[Paste your system prompt here verbatim.]
+# pbzx Stage 1: Naive AI Parallelization
+
+This is a bzip2 compression tool called pbzx.
+
+## Your task
+
+Please parallelize this bzip2 compression program using multiple threads.
+Preserve correctness and improve performance.
+
+## Source files you may modify
+
+- src/main.c        -- main entry point and compression pipeline
+- src/writer.c      -- writes compressed blocks to output
+- src/bz_block.c/h  -- per-block bzip2 compression
+- src/block_reader.c/h -- reads input into fixed-size blocks
+- src/args.c/h      -- argument parsing (already accepts --threads N)
+- Makefile          -- update CFLAGS here if needed (-fopenmp, -lpthread)
+
+## Do NOT modify
+
+- third_party/bzip2/   -- vendored libbz2 source
+- libbz2.a             -- prebuilt static library
+
+## Build
+
+    make clean && make all   # produces ./pbzx
+
+## Test correctness
+
+    python3 bench/verify.py ./pbzx <input_file>
+    # Expected: PASS  <input_file>
+
+## Benchmark
+
+    python3 bench/run_bench.py --pbzx ./pbzx --inputs <input_file> \
+      --threads 1 2 4 8 --block-sizes 900000 --level 9 --repeat 3 \
+      --out results/stage1_results.csv
+
+## Interface
+
+    ./pbzx -i input.bin -o output.bz2 [--threads N] [--block-size B] [--level L]
+
+The --threads flag is parsed but currently unused in the compression step.
+Output must be valid bzip2: bunzip2 -c output.bz2 | cmp - input.bin must succeed.
+--threads 1 must behave identically to the original sequential code.
+\end{lstlisting}
+
+\subsection*{Stage 2 --- Constraint-guided (branch \texttt{stage/2-constrained})}
+
+\begin{lstlisting}
+# pbzx Stage 2: Constraint-guided AI Parallelization
+
+This is a bzip2 compression tool called pbzx. Your goal is to parallelize it
+using block-level parallelism, choosing design parameters informed by the actual
+hardware this machine offers.
+
+## Your task
+
+Please parallelize the compressor using block-level parallelism.
+
+Requirements:
+1. Split the input file into fixed-size blocks.
+2. Assign each block a unique block ID.
+3. Use worker threads to compress blocks independently.
+4. Use a writer thread (or equivalent ordered mechanism) to emit blocks in
+   the original order.
+5. Avoid race conditions and unnecessary global locks.
+6. Avoid changing the compression result (decompressed output must match
+   input exactly).
+7. Before choosing thread count, block size, and queue depth, run lscpu,
+   nproc, free -h, and getconf -a | grep -i cache to understand the machine
+   hardware, then use those values as constraints in your implementation.
+
+## Source files you may modify
+
+- src/main.c        -- main entry point and compression pipeline
+- src/writer.c      -- ordered output
+- src/bz_block.c/h  -- per-block compression (thread-safe: no global state)
+- src/block_reader.c/h -- block reader
+- src/args.c/h      -- argument parsing (already accepts --threads N)
+- Makefile          -- update CFLAGS as needed
+- You may add new src/*.c / src/*.h files
+
+## Do NOT modify
+
+- third_party/bzip2/
+- libbz2.a
+
+## Build / Test / Benchmark
+
+    make clean && make all
+    python3 bench/verify.py ./pbzx <input_file>
+    python3 bench/run_bench.py --pbzx ./pbzx --inputs <input_file> \
+      --threads 1 2 4 8 --block-sizes 900000 --level 9 --repeat 3 \
+      --out results/stage2_results.csv
+
+## Interface
+
+    ./pbzx -i input.bin -o output.bz2 [--threads N] [--block-size B] [--level L]
+
+--threads 1 must still work correctly. Output must be valid bzip2.
+\end{lstlisting}
+
+\subsection*{Stage 3 --- Profiling-guided (branch \texttt{stage/3-profiling})}
+
+\begin{lstlisting}
+# pbzx Stage 3: Profiling-guided AI Parallelization
+
+This is a sequential bzip2 compression tool called pbzx. Your goal is to
+parallelize it and iteratively optimize it using profiling tools.
+
+## Your task
+
+Please parallelize this bzip2 compression program using multiple threads,
+then use profiling tools to measure bottlenecks in your own implementation
+and improve it. Repeat the profile -> optimize -> verify cycle until you
+are satisfied with the performance.
+
+## Permitted profiling tools
+
+You have full permission to run any of these on ./pbzx at any time:
+
+- perf stat -d ./pbzx ...                  -- hardware counters
+- perf record -g ./pbzx ... && perf report -- call-graph hotspots
+- valgrind --tool=callgrind ./pbzx ...     -- instruction-level profiling
+- valgrind --tool=massif ./pbzx ...        -- heap profiling
+- /usr/bin/time -v ./pbzx ...              -- wall time + peak RSS + CPU%
+- strace -c ./pbzx ...                     -- system call summary
+- lscpu, nproc, free -h, getconf -a | grep -i cache -- machine info
+
+## Source files you may modify
+
+- src/main.c        -- main entry point and compression pipeline
+- src/writer.c      -- writes compressed blocks to output
+- src/bz_block.c/h  -- per-block bzip2 compression
+- src/block_reader.c/h -- reads input into fixed-size blocks
+- src/args.c/h      -- argument parsing (accepts --threads N)
+- Makefile          -- update CFLAGS as needed
+- You may add new src/*.c / src/*.h files
+
+## Do NOT modify
+
+- third_party/bzip2/
+- libbz2.a
+
+## Build / Test / Benchmark
+
+    make clean && make all
+    python3 bench/verify.py ./pbzx <input_file>
+    # Expected: PASS  <input_file> -- verify after every optimization round
+    python3 bench/run_bench.py --pbzx ./pbzx --inputs <input_file> \
+      --threads 1 2 4 8 --block-sizes 900000 --level 9 --repeat 3 \
+      --out results/stage3_results.csv
+
+## Interface
+
+    ./pbzx -i input.bin -o output.bz2 [--threads N] [--block-size B] [--level L]
+
+--threads 1 must still work correctly. Output must be valid bzip2.
 \end{lstlisting}
 
 \section{Representative Agent Output}
-\begin{lstlisting}
-[Paste representative agent output here.]
-\end{lstlisting}
+
+The complete agent interaction---tool calls, extended thinking blocks, and
+generated code---is preserved in the Git history of the
+\texttt{stage/3-profiling} branch.
+The primary files produced or modified by the Stage~3 agent are
+\texttt{src/main.c} (OpenMP parallel loop with per-thread arena allocator),
+the new files \texttt{src/arena.c} and \texttt{src/arena.h} (bump-pointer
+memory arena that eliminated per-block \texttt{malloc}/\texttt{free}
+overhead, reducing page-fault counts from $\sim$674K to $\sim$181K), and
+\texttt{Makefile} (updated \texttt{CFLAGS} for OpenMP and optimization
+flags). These changes are described in detail in Section~IV-B.
 
 \section{Changes Made to the Agent}
 The Claude Code agent was provided isolated Git worktrees and varying levels of command permissions via per-branch CLAUDE.md files. In Stage 2, it was granted permissions to run machine-discovery commands (lscpu, free, nproc). In Stage 3, the agent context was dynamically updated to include raw outputs from \texttt{perf stat} and \texttt{/usr/bin/time -v}, granting it full visibility into its own execution bottlenecks.
