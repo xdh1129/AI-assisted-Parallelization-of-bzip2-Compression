@@ -45,6 +45,28 @@
   xleftmargin=0.5em
 }
 
+% --- When a column/page holds only floats, LaTeX's default glue spreads them
+%     out to fill the height, leaving large gaps around stacked floats (e.g.
+%     above/below a table sandwiched between two figures). Pack them at the top
+%     with a fixed separation instead, and push the slack to the bottom.
+\makeatletter
+\setlength{\@fptop}{0pt}
+\setlength{\@fpsep}{12pt plus 0fil}
+\setlength{\@fpbot}{0pt plus 1fil}
+\makeatother
+
+% --- Relax float-placement thresholds so columns can hold floats AND text
+%     together, instead of isolating stacked floats into text-free columns.
+\renewcommand{\topfraction}{0.9}
+\renewcommand{\bottomfraction}{0.8}
+\renewcommand{\textfraction}{0.08}
+\renewcommand{\floatpagefraction}{0.85}
+\renewcommand{\dbltopfraction}{0.9}
+\renewcommand{\dblfloatpagefraction}{0.85}
+\setcounter{topnumber}{3}
+\setcounter{bottomnumber}{2}
+\setcounter{totalnumber}{5}
+
 \begin{document}
 
 \title{AI-Assisted Parallelization of bzip2 Compression\\
