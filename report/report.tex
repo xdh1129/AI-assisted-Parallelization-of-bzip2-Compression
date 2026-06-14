@@ -89,19 +89,13 @@ The objective of this project is to explore different ways of using AI to assist
 \subsection{The bzip2 Algorithm}
 bzip2 processes data in independent blocks, so block-level parallelism is possible. Since different data blocks can be compressed independently, multiple blocks may be assigned to different worker threads and processed in parallel. In addition, block size may affect both compression ratio and parallel efficiency.
 
-\subsection{Dataset, Baseline, and AI Tooling}
-\label{subsec:dataset}
-\begin{itemize}
-  \item \textbf{Workload:} The primary workload for all benchmark sweeps is a $\sim$1.08GB file (1,082,774,528 bytes) produced by concatenating the Canterbury Corpus \texttt{large} reference tarball (11,162,624 bytes) 97 times, providing a realistic and compressible dataset.
-  \item \textbf{Baseline:} To isolate the effects of our parallelization strategies, we utilize pbzx, a custom C11 baseline that sequentially compresses blocks using vendored libbz2. We compare the AI-generated implementations against lbzip2, a highly optimized, existing parallel implementation.
-  \item \textbf{AI Agent Setup:} The Claude Code agent operates autonomously within isolated Git worktrees for each stage.
-\end{itemize}
+\subsection{Existing Parallel bzip2 Implementations}
+Two mature open-source tools parallelize bzip2 compression and serve as external references in our evaluation.
 
-
-\subsection{lbzip2: Algorithmic Optimization}
+\subsubsection{lbzip2}
 lbzip2 is an algorithmically optimized reference: it emits byte-compatible \texttt{.bz2} output but, unlike pbzx, does not link libbz2. It replaces bzip2's comparison-based blocksort with its own libdivsufsort-style suffix-array BWT (\texttt{divbwt}), computing the identical transform with far less work, and parallelizes through a hand-built \texttt{pthread} pipeline rather than OpenMP fork/join. It was the fastest \emph{per-core} implementation in our sweeps; profiling showed it to be branch-prediction-bound and already near the hardware ceiling, so we use it unmodified.
 
-\subsection{pbzip2: Hand-Built Parallel Runtime}
+\subsubsection{pbzip2}
 pbzip2 is the closest reference to our own design: like pbzx, it is a block-parallel front-end \emph{on top of} stock libbz2, so it shares bzip2's codec and thus the same per-core BWT cost and compression ratio. It differs only in how work is distributed --- a hand-built POSIX-threads producer/worker/writer pipeline with order-preserving output, in place of pbzx's OpenMP fork/join. It is, in effect, the hand-coded ancestor of the same block-parallel idea our AI-assisted versions express through OpenMP.
 %------------------------------------------------------------------------------
 \section{Methodology}
@@ -109,6 +103,9 @@ pbzip2 is the closest reference to our own design: like pbzx, it is a block-para
 % Category B: your AI prompt-engineering design -- how you instruct and guide the
 %             agent, your iteration strategy, and the agent configuration.
 Instead of only asking AI to ``make the code faster,'' we designed a structured three-stage workflow to guide the agent step by step. The project isolates the development of each AI-assisted implementation on dedicated Git branches stemming from the main baseline.
+
+\subsection{Sequential Baseline and AI-Agent Setup}
+To isolate the effects of our parallelization strategies, we start from pbzx, a custom C11 baseline that sequentially compresses blocks using vendored libbz2. All AI-assisted work is carried out by the Claude Code agent, which operates autonomously within isolated Git worktrees --- one per stage --- branched from this baseline, keeping each implementation independent and reproducible.
 
 \subsection{Stage 1: Naive AI Parallelization}
 In the first stage, we provided the agent with the sequential bzip2 compression code and asked it to parallelize the program. The agent receives a minimal prompt without hints regarding the parallelization strategy. This stage tests whether AI can independently identify the parallelizable parts of the program.
@@ -120,10 +117,17 @@ In the second stage, we provided the agent with clearer design requirements. The
 In the third stage, we ran the AI-generated parallel version and collected profiling information, such as CPU utilization, runtime breakdown, I/O waiting time, lock contention, memory usage, thread idle time, and scalability under different thread counts. We fed this empirical bottleneck data back into the LLM context. This stage tests whether profiling feedback can help AI move from superficial code changes to bottleneck-driven optimization.
 %------------------------------------------------------------------------------
 \section{Experimental Setup}
-The experiments were conducted on a dual-socket server running Ubuntu 24.04 Server, equipped with two Intel Xeon Platinum 8352V processors (Ice Lake architecture) operating at a 2.10 GHz base clock (up to 3.50 GHz turbo). The system provides a total of 72 physical cores (36 per socket) and 144 logical threads via Intel Hyper-Threading, partitioned into two NUMA nodes. The cache hierarchy consists of 48 KB L1d, 32 KB L1i, and 1.25 MB L2 cache per physical core, backed by a shared 54 MB L3 cache per socket, with support for AVX-512 instruction set extensions. 
+
+\subsection{Hardware and Software Environment}
+The experiments were conducted on a dual-socket server running Ubuntu 24.04 Server, equipped with two Intel Xeon Platinum 8352V processors (Ice Lake architecture) operating at a 2.10 GHz base clock (up to 3.50 GHz turbo). The system provides a total of 72 physical cores (36 per socket) and 144 logical threads via Intel Hyper-Threading, partitioned into two NUMA nodes. The cache hierarchy consists of 48 KB L1d, 32 KB L1i, and 1.25 MB L2 cache per physical core, backed by a shared 54 MB L3 cache per socket, with support for AVX-512 instruction set extensions.
 
 The target software environment utilizes C11 with pthreads or OpenMP, orchestrated by a Python-based benchmarking harness. Profiling data is gathered using hardware performance counters via \texttt{perf stat}, call-graph hotspots via \texttt{perf record}, and resource monitoring via GNU \texttt{/usr/bin/time -v}. We evaluate both system performance and AI effectiveness, defining success as achieving measurable parallel speedup while preserving byte-for-byte data integrity.
 
+\subsection{Workload and Benchmark Configuration}
+\label{subsec:dataset}
+The primary workload for all benchmark sweeps is a $\sim$1.08GB file (1,082,774,528 bytes) produced by concatenating the Canterbury Corpus \texttt{large} reference tarball (11,162,624 bytes) 97 times, providing a realistic and compressible dataset. Against this input we swept thread counts $\{1, 2, 4, 8, 16, 32\}$ with block size 900\,KB, compression level 9, and 3 repeats per configuration. Each AI-assisted stage was benchmarked in its own isolated Git worktree, and the lbzip2 and pbzip2 references were benchmarked on the same input and thread sweep.
+
+\subsection{Evaluation Metrics}
 The metrics tracked by the harness include:
 \begin{itemize}
   \item \textbf{Runtime:} Total compression time.
@@ -144,8 +148,7 @@ Performance improvements are quantified mathematically using the following stand
 %------------------------------------------------------------------------------
 \section{Results}
 
-\subsection{Benchmark Setup}
-We swept thread counts $\{1, 2, 4, 8, 16, 32\}$ (block size 900KB, compression level 9, 3 repeats per configuration) against the 1.08GB input described in Section~\ref{subsec:dataset} (the Canterbury Corpus \texttt{large} tarball concatenated 97 times, 1,082,774,528 bytes). Each AI-assisted stage was benchmarked in an isolated git worktree, and lbzip2 was benchmarked as an external reference using the same input and thread sweep.
+All results below use the workload and benchmark configuration described in Section~\ref{subsec:dataset}: the 1.08GB Canterbury Corpus input, the thread sweep $\{1, 2, 4, 8, 16, 32\}$, block size 900\,KB, and compression level 9.
 
 \subsection{Correctness}
 All three AI-assisted stages produce \textbf{byte-identical compressed output} regardless of thread count, while lbzip2 differs only slightly in output size due to its block framing --- not a correctness issue. Round-trip decompression against the original 1.08GB input passes for all five parallel implementations (the three AI-assisted stages plus the lbzip2 and pbzip2 references) at every thread count tested. This confirms that increasing thread count does not change the compressed output or break correctness for any of the three AI-generated parallel versions.
