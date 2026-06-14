@@ -170,7 +170,16 @@ Performance improvements are quantified mathematically using the following stand
 %------------------------------------------------------------------------------
 \section{Results}
 
-All results below use the workload and benchmark configuration described in Section~\ref{subsec:dataset}: the 1.08GB Canterbury Corpus input, the thread sweep $\{1, 2, 4, 8, 16, 32\}$, block size 900\,KB, and compression level 9.
+\subsection{AI-Generated Implementations}
+All three AI-assisted stages parallelize the same sequential pbzx baseline, but they arrive at substantially different designs, which is what the rest of this section compares.
+
+\textbf{Stage 1 (naive)} parallelizes the block-compression loop directly with OpenMP: a single \texttt{\#pragma omp parallel for schedule(dynamic)} spreads the independent 900\,KB blocks across threads in a fork/join model, the only explicit coordination being an atomic flag for error propagation. Each block allocates and frees its own libbz2 workspace.
+
+\textbf{Stage 2 (constraint-guided)} instead builds the hand-written \texttt{pthread} pipeline the prompt mandated: a reader thread loads raw blocks and assigns unique IDs, a pool of worker threads compresses them independently, and a separate writer thread emits the compressed blocks in original order. The three roles coordinate through one mutex-guarded, bounded queue (\texttt{p->mtx} with per-role condition variables), and buffers are allocated and freed per block.
+
+\textbf{Stage 3 (profiling-guided)} keeps Stage 1's OpenMP fork/join loop but, guided by profiling, swaps the per-block workspace \texttt{malloc}/\texttt{free} for a per-thread bump-pointer arena --- a 16\,MB thread-local buffer allocated once and reset per block, with oversize requests falling back to \texttt{malloc} --- eliminating the repeated large allocations that glibc was servicing through \texttt{mmap}.
+
+In short, Stages 1 and 3 share an OpenMP fork/join structure (Stage 3 adding arena-based memory reuse), whereas Stage 2 uses an explicit reader/worker/writer \texttt{pthread} pipeline with per-block allocation. All results that follow use the workload and benchmark configuration of Section~\ref{subsec:dataset} (the 1.08GB Canterbury Corpus input, the thread sweep $\{1, 2, 4, 8, 16, 32\}$, block size 900\,KB, and compression level 9).
 
 \subsection{Correctness}
 All three AI-assisted stages produce \textbf{byte-identical compressed output} regardless of thread count, while lbzip2 differs only slightly in output size due to its block framing --- not a correctness issue. Round-trip decompression against the original 1.08GB input passes for all five parallel implementations (the three AI-assisted stages plus the lbzip2 and pbzip2 references) at every thread count tested. This confirms that increasing thread count does not change the compressed output or break correctness for any of the three AI-generated parallel versions.
