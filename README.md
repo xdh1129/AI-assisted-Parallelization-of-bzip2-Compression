@@ -2,6 +2,9 @@
 
 Team 05 — final project for the parallel-programming course.
 
+This repository contains the implementation, experiments, benchmark data, and
+report for an AI-assisted parallelization study of bzip2 compression.
+
 ## What this project is
 
 A study of **using AI to parallelize bzip2 compression**, guided by profiling
@@ -9,47 +12,26 @@ feedback. bzip2 processes data in independent blocks, so block-level parallelism
 is possible — but doing it well requires handling output ordering, load balancing,
 synchronization overhead, and I/O bottlenecks.
 
-The project compares several versions of a block-parallel bzip2 compressor and
-evaluates **whether AI-assisted parallelization improves with more guidance**
-(direct prompting → design constraints → profiling feedback), while preserving
-correctness. See `proposal_team05.pdf` for the full proposal.
+The project evaluates **how different levels of AI guidance affect parallel
+performance and code quality**: naive prompting, explicit design constraints,
+and profiling feedback. Every implementation is checked for correctness and
+compared against the sequential baseline and the established `lbzip2` tool.
 
-The planned versions to compare:
+Read the [final report](report/report.pdf) or [report draft](report/thesis-draft.md)
+for the full methodology and analysis.
 
-1. Sequential baseline
-2. An existing parallel tool (lbzip2 / pbzip2) — external reference
-3. Naive AI-generated parallel version
-4. Constraint-guided AI parallel version
-5. Profiling-guided AI optimized version
+The completed experiment consists of:
+
+1. A sequential `pbzx` baseline using vendored `libbz2`
+2. A naive AI-generated OpenMP implementation
+3. A constraint-guided pthread pipeline with ordered output
+4. A profiling-guided implementation with per-thread workspace arenas
+5. `lbzip2` and `pbzip2` as external reference implementations
 
 Metrics: runtime, throughput (MB/s), speedup, parallel efficiency, compression
 ratio, peak memory, and correctness.
 
 ---
-
-## Current status
-
-**Done — sequential baseline + measurement infrastructure.**
-The parallel versions are intentionally *not* implemented yet: the baseline and
-the benchmark/profiling harness are the "measuring apparatus" built first, so each
-later parallel version can be measured the same way (apples-to-apples).
-
-| Component | Status |
-| --- | --- |
-| `pbzx` sequential compressor (vendored libbz2) | done |
-| Correctness oracle (`bench/verify.py`) | done |
-| Benchmark harness (`bench/run_bench.py`) | done |
-| Profiling command builders (`bench/profilers.py`) | done |
-| Plotting (`bench/plot.py`) | done |
-| Test data generator (`data/fetch.sh`) | done |
-| **OpenMP parallel compress path** | **not started** |
-| lbzip2 / pbzip2 reference runs | not started |
-| Naive / constraint-guided / profiling-guided AI versions | not started |
-
-> **Note:** `pbzx` accepts `--threads N`, but right now that value is only
-> recorded in the stats line — the compression loop is still single-threaded.
-> `--threads 1` and `--threads 8` currently produce identical output in identical
-> time. Actual multithreading is added in the next phase (see Roadmap).
 
 ### How `pbzx` works
 
@@ -66,23 +48,83 @@ though for a single-block input it is byte-identical to `bzip2`.
 
 ---
 
-## Build & test
+## Results at a glance
+
+The main sweep used a 1.08 GB input, 900 KB blocks, compression level 9, and
+three repetitions at each thread count. Mean compression time was:
+
+| Threads | Stage 1: naive | Stage 2: constrained | Stage 3: profiling | `lbzip2` |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 80.84 s | 81.77 s | 78.72 s | 67.90 s |
+| 4 | 20.80 s | 20.74 s | 20.02 s | 17.58 s |
+| 16 | 5.52 s | 5.50 s | 5.36 s | 4.96 s |
+| 32 | 3.06 s | 3.49 s | **3.03 s** | 3.14 s |
+
+Key findings:
+
+- All three AI-generated implementations passed round-trip correctness at every
+   tested thread count and preserved the compressed output across thread counts.
+- Block-level parallelism scaled close to linearly through 16 threads. At 32
+   threads, speedup plateaued around 22–26x because of block granularity and BWT
+   memory bandwidth.
+- Profiling feedback made Stage 3 the fastest AI-generated implementation at
+   every thread count. Replacing per-block allocation with a per-thread bump
+   arena reduced page faults from roughly 674K to 181K.
+- Constraint guidance improved structure and ordering guarantees, but its
+   pthread pipeline added enough synchronization overhead to trail the other
+   implementations in absolute runtime.
+
+![Compression time by implementation](report/runtime_by_impl.png)
+
+![Throughput by implementation](report/throughput_by_impl.png)
+
+![Speedup by implementation](report/speedup_by_impl.png)
+
+More raw data and comparison plots are available under
+[`experiments/comparison`](experiments/comparison/).
+
+## Implementation stages
+
+Each stage is preserved in its own branch so the AI guidance can be compared as
+an experiment rather than inferred from a single final implementation:
+
+| Branch | Approach | Main contribution |
+| --- | --- | --- |
+| `main` | Baseline and merged analysis | Sequential `pbzx`, tests, harness, results, and report |
+| `stage/1-naive` | Naive AI parallelization | Direct OpenMP parallelization of independent blocks |
+| `stage/2-constrained` | Constraint-guided design | Worker pipeline, block IDs, and order-preserving writer |
+| `stage/3-profiling` | Profiling-guided optimization | Per-thread workspace arena and bottleneck-driven tuning |
+| `bzip2-gpu` | Extension study | CUDA exploration inside the bzip2 compression pipeline |
+
+The core design is deliberately block-oriented: each input block is compressed
+into an independent bzip2 stream, then emitted in block-ID order. This makes the
+compression work parallelizable while preserving a valid concatenated `.bz2`
+output that standard `bunzip2` can decode.
+
+## Reproduce the experiment
+
+### Requirements
 
 Requirements: a C compiler (`cc`), `make`, `bunzip2`, Python 3. For the harness:
 `pip install -r bench/requirements.txt` (pytest, matplotlib). Profiling tools
-(`perf`, `valgrind`) and GNU `/usr/bin/time -v` are **Linux-only** — the primary
-benchmark target is Linux, but everything builds and the unit tests run on macOS too.
+(`perf`, `valgrind`) and GNU `/usr/bin/time -v` are **Linux-oriented**. The
+project builds and its tests run on macOS too; on macOS, install GNU time with
+`brew install coreutils` and pass `--time-bin gtime` to the benchmark script.
 
 ```bash
-make           # builds vendored libbz2.a and the pbzx binary
-make test      # builds + runs 5 C unit tests and 13 Python tests
-make clean
+make
+python3 -m pip install -r bench/requirements.txt
+make test
 ```
+
+`make` builds the vendored `libbz2.a` and the `pbzx` executable. `make test`
+runs the five C unit tests and the Python test suite. Use `make clean` to remove
+generated objects, binaries, and test executables.
 
 ## Usage
 
 ```bash
-# compress (sequential today; --threads is recorded but not yet acted on)
+# compress one input
 ./pbzx -i input.dat -o output.bz2 --block-size 900000 --level 9 --threads 1
 
 # decompress with the standard tool (our output is a valid .bz2)
@@ -94,6 +136,9 @@ bunzip2 -c output.bz2 > restored.dat
 ```
 PBZX_STATS input_bytes=.. output_bytes=.. block_size=.. threads=.. level=.. blocks=.. compress_seconds=..
 ```
+
+Supported options are `-i INPUT`, `-o OUTPUT`, `--threads N`,
+`--block-size BYTES`, and `--level 1..9`.
 
 ### Correctness check
 
@@ -115,8 +160,9 @@ python3 bench/run_bench.py --pbzx ./pbzx \
 python3 bench/plot.py --results results.csv --out speedup.png
 ```
 
-On macOS, GNU time is absent; install coreutils and pass `--time-bin gtime`, or run
-the sweep on the Linux target.
+The benchmark writes CSV results and removes its temporary compressed outputs.
+On macOS, add `--time-bin gtime` after installing `coreutils`, or run the sweep
+on the Linux target.
 
 ---
 
@@ -140,39 +186,11 @@ data/                # test inputs (gitignored) + fetch.sh
 docs/superpowers/    # design spec and the task-by-task implementation plan
 ```
 
-Design spec: `docs/superpowers/specs/2026-05-27-parallel-bzip2-baseline-harness-design.md`
-Implementation plan: `docs/superpowers/plans/2026-05-27-parallel-bzip2-baseline-harness.md`
+Design spec: [`docs/superpowers/specs/2026-06-21-team05-final-presentation-design.md`](docs/superpowers/specs/2026-06-21-team05-final-presentation-design.md)
+
+Implementation plan: [`docs/superpowers/plans/2026-06-21-team05-final-presentation.md`](docs/superpowers/plans/2026-06-21-team05-final-presentation.md)
 
 ---
-
-## Roadmap (planned work)
-
-The parallelization is the actual research content. Each AI stage is one
-experiment: parallelize the *same* sequential code under a *different* level of
-guidance, then measure correctness and performance with the existing harness.
-
-1. **Enable OpenMP.** Add `-fopenmp` to the build; turn the compress loop in
-   `src/main.c` into a parallel loop. Two things must change first (already flagged
-   in the code comment): the `break`-on-error is illegal in an OpenMP `for`, and
-   `input_bytes` is summed outside the loop to avoid a loop-carried reduction.
-
-2. **Stage 1 — Naive AI parallelization.** Give the AI only the sequential code and
-   "parallelize it." Record the unguided result as the control.
-
-3. **Stage 2 — Constraint-guided.** Provide explicit design constraints (fixed-size
-   blocks, unique block IDs, worker threads + an ordered writer, no global locks).
-   Measure the improvement over Stage 1.
-
-4. **Stage 3 — Profiling-guided.** Run the result, collect profiling data (CPU
-   utilization, I/O wait, lock contention, thread idle time, scalability across
-   thread counts), feed it back, and ask the AI to fix the actual bottleneck.
-
-5. **Reference comparisons.** Benchmark stock `bzip2` (sequential reference) and
-   `lbzip2` / `pbzip2` (parallel references) through the same harness.
-
-6. **Analysis & report.** Compare all versions on the metrics; analyze how AI output
-   quality and performance change as guidance increases; study the effect of block
-   size and thread count on speedup and compression ratio.
 
 ### Why the baseline is `pbzx --threads 1`, not stock `bzip2`
 
